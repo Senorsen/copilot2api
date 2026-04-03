@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Fix Docker multi-arch build: arm64 image was shipping the amd64 binary due to `ARG TARGETARCH=amd64` default overriding buildx's automatic platform arg
+- Fix CI triggering redundant runs on tag pushes — `on: push` now scoped to `main` branch only
+
 ## [0.3.0] - 2026-04-03
 
 ### Features
