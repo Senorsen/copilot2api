@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/gemini"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
 	"github.com/whtsky/copilot2api/proxy"
@@ -119,14 +122,51 @@ func main() {
 	// Initialize Anthropic handler
 	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache)
 
+	// Initialize Gemini handler
+	geminiHandler := gemini.NewHandler(authClient, transport, modelsCache)
+
 	// Set up routes
 	mux := http.NewServeMux()
+
+	// Core routes
 	mux.Handle("/v1/chat/completions", proxyHandler)
 	mux.Handle("/v1/models", proxyHandler)
 	mux.Handle("/v1/embeddings", proxyHandler)
 	mux.Handle("/v1/responses", proxyHandler)
 	mux.Handle("/v1/messages", anthropicHandler)
+	mux.Handle("/v1beta/models", geminiHandler)
+	mux.Handle("/v1beta/models/", geminiHandler)
 	mux.HandleFunc("/usage", proxyHandler.HandleUsage)
+
+	// AmpCode routes — strip /amp prefix so existing handlers see /v1/...
+	mux.Handle("/amp/v1/chat/completions", http.StripPrefix("/amp", proxyHandler))
+	mux.Handle("/amp/v1/models", http.StripPrefix("/amp", proxyHandler))
+	mux.Handle("/amp/v1/responses", http.StripPrefix("/amp", proxyHandler))
+	mux.Handle("/amp/v1/embeddings", http.StripPrefix("/amp", proxyHandler))
+
+	// AmpCode provider-specific routes
+	mux.Handle("/api/provider/openai/v1/chat/completions", http.StripPrefix("/api/provider/openai", proxyHandler))
+	mux.Handle("/api/provider/openai/v1/responses", http.StripPrefix("/api/provider/openai", proxyHandler))
+	mux.Handle("/api/provider/openai/v1/models", http.StripPrefix("/api/provider/openai", proxyHandler))
+	mux.Handle("/api/provider/anthropic/v1/messages", http.StripPrefix("/api/provider/anthropic", anthropicHandler))
+	mux.Handle("/api/provider/google/v1beta/models", http.StripPrefix("/api/provider/google", geminiHandler))
+	mux.Handle("/api/provider/google/v1beta/models/", http.StripPrefix("/api/provider/google", geminiHandler))
+
+	// AmpCode management — reverse proxy to ampcode.com for auth, threads, etc.
+	// AI inference stays on Copilot API (routes above); only metadata hits ampcode.com.
+	ampBackend, _ := url.Parse("https://ampcode.com")
+	ampReverseProxy := newAmpReverseProxy(ampBackend)
+	mux.Handle("/api/", ampReverseProxy)
+	mux.HandleFunc("/amp/v1/login", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://ampcode.com/login", http.StatusFound)
+	})
+	mux.HandleFunc("/amp/auth/cli-login", func(w http.ResponseWriter, r *http.Request) {
+		target := "https://ampcode.com/auth/cli-login"
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+	})
 
 	// Pre-warm models cache to avoid cold-cache latency on first request
 	go func() {
@@ -142,7 +182,7 @@ func main() {
 		// No ReadTimeout — ReadHeaderTimeout protects against slowloris.
 		// ReadTimeout would kill long-lived SSE streaming connections.
 		IdleTimeout: 120 * time.Second,
-		Handler:     mux,
+		Handler:     logAllRequests(mux),
 	}
 
 	// Start server in goroutine
@@ -176,4 +216,25 @@ func main() {
 	}
 
 	slog.Info("server stopped")
+}
+
+// newAmpReverseProxy creates a reverse proxy to ampcode.com that forwards the
+// client's auth headers. Used for amp CLI management calls (getUserInfo,
+// threads, telemetry, etc.) — no AI credits are consumed.
+func newAmpReverseProxy(target *url.URL) *httputil.ReverseProxy {
+	return &httputil.ReverseProxy{
+		Director: func(req *http.Request) {
+			slog.Debug("amp proxy", "method", req.Method, "path", req.URL.Path, "query", req.URL.RawQuery)
+			req.URL.Scheme = target.Scheme
+			req.URL.Host = target.Host
+			req.Host = target.Host
+		},
+	}
+}
+
+func logAllRequests(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		slog.Debug("incoming request", "method", r.Method, "path", r.URL.Path, "query", r.URL.RawQuery)
+		next.ServeHTTP(w, r)
+	})
 }
