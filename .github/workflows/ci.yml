@@ -51,7 +51,7 @@ jobs:
               ext=""
               if [ "$goos" = "windows" ]; then ext=".exe"; fi
               echo "Building $goos/$goarch..."
-              GOOS=$goos GOARCH=$goarch go build -v \
+              CGO_ENABLED=0 GOOS=$goos GOARCH=$goarch go build -v \
                 -ldflags="${{ steps.version.outputs.ldflags }}" \
                 -o "dist/copilot2api-$goos-$goarch$ext" .
             done
@@ -78,6 +78,10 @@ jobs:
           path: dist
       - name: Make binaries executable
         run: chmod +x dist/*
+      - name: Smoke test image
+        run: |
+          docker build -f Dockerfile.ci -t copilot2api-smoke .
+          docker run --rm copilot2api-smoke --version
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3

@@ -4,8 +4,13 @@
 
 ### Bug Fixes
 
+- Fix Docker image crash (`exec /copilot2api: no such file or directory`) caused by dynamically-linked binary in `scratch` image — add `CGO_ENABLED=0` to CI cross-compilation
 - Fix Docker multi-arch build: arm64 image was shipping the amd64 binary due to `ARG TARGETARCH=amd64` default overriding buildx's automatic platform arg
 - Fix CI triggering redundant runs on tag pushes — `on: push` now scoped to `main` branch only
+
+### CI
+
+- Add Docker smoke test — `docker run --version` gate before pushing to prevent broken images from reaching the registry
 
 ## [0.3.0] - 2026-04-03
 
