@@ -17,15 +17,56 @@ A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthrop
 
 ## Quick Start
 
-```bash
-# Build from source (requires Go 1.26+)
-go build -o copilot2api .
+### Docker
 
-# Start the proxy
+```bash
+docker run -it --rm \
+  -p 127.0.0.1:7777:7777 \
+  -v ~/.config/copilot2api:/root/.config/copilot2api \
+  ghcr.io/whtsky/copilot2api:latest
+```
+
+The volume mount persists your GitHub credentials across container restarts. The examples publish the port on `127.0.0.1` only so the proxy stays local by default.
+
+<details>
+<summary>Docker Compose</summary>
+
+```yaml
+services:
+  copilot2api:
+    image: ghcr.io/whtsky/copilot2api:latest
+    ports:
+      - "127.0.0.1:7777:7777"
+    volumes:
+      - ${HOME}/.config/copilot2api:/root/.config/copilot2api
+```
+
+Start it with:
+
+```bash
+docker compose up
+```
+
+</details>
+
+### Download a release binary
+
+```bash
+# Example: macOS Apple Silicon
+curl -L -o copilot2api \
+  https://github.com/whtsky/copilot2api/releases/latest/download/copilot2api-darwin-arm64
+
+# Example: Linux x64
+# curl -L -o copilot2api \
+#   https://github.com/whtsky/copilot2api/releases/latest/download/copilot2api-linux-amd64
+
+chmod +x copilot2api
 ./copilot2api
 ```
 
-First run will prompt GitHub Device Flow authentication:
+Download the asset that matches your platform from [GitHub Releases](https://github.com/whtsky/copilot2api/releases/latest). Published binaries use names like `copilot2api-linux-amd64`, `copilot2api-linux-arm64`, `copilot2api-darwin-amd64`, `copilot2api-darwin-arm64`, `copilot2api-windows-amd64.exe`, and `copilot2api-windows-arm64.exe`.
+
+On first run, both Docker and downloaded binaries prompt GitHub Device Flow authentication:
 
 ```
 🔐 GitHub Authentication Required
@@ -118,7 +159,8 @@ Or add to `~/.config/amp/settings.json`:
 
 Chat completions, tool calls, and image input all route through Copilot API. Login and management routes (threads, telemetry) are proxied to `ampcode.com` — a free amp account is required for authentication.
 
-## Usage with curl
+<details>
+<summary>Usage with curl</summary>
 
 ```bash
 # OpenAI chat completion
@@ -138,6 +180,8 @@ curl http://localhost:7777/v1/models
 # Check usage/quota
 curl http://localhost:7777/usage
 ```
+
+</details>
 
 <details>
 <summary>Usage with SDKs</summary>
@@ -222,27 +266,6 @@ Environment variables are used as defaults when flags are not provided:
 | `COPILOT2API_DEBUG` | Enable debug logging (`true`/`false`, `1`/`0`) | `false` |
 
 CLI flags take precedence over environment variables.
-
-## Docker
-
-```bash
-docker run -it -p 7777:7777 \
-  -v ~/.config/copilot2api:/root/.config/copilot2api \
-  ghcr.io/whtsky/copilot2api
-```
-
-The Docker image defaults to `COPILOT2API_HOST=0.0.0.0` so port forwarding works out of the box. The volume mount persists your GitHub credentials across container restarts. First run will prompt Device Flow authentication.
-
-To use a custom port:
-
-```bash
-docker run -it -p 8080:8080 \
-  -v ~/.config/copilot2api:/root/.config/copilot2api \
-  -e COPILOT2API_PORT=8080 \
-  ghcr.io/whtsky/copilot2api
-```
-
-> ⚠️ The Docker image listens on all interfaces by default. Only publish the port to `127.0.0.1` (e.g. `-p 127.0.0.1:7777:7777`) unless you know what you're doing.
 
 ## How It Works
 
