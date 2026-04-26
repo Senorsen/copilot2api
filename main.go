@@ -114,11 +114,11 @@ func main() {
 
 	// Shared models cache — a single fetch populates both raw JSON (for
 	// proxying GET /v1/models) and parsed model info (for capability detection).
-	upstreamClient := upstream.NewClient(authClient, transport)
+	upstreamClient := upstream.NewClient(authClient, transport, *debug)
 	modelsCache := models.NewCache(upstreamClient, 5*time.Minute)
 
 	// Initialize proxy handler
-	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache)
+	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache, *debug)
 
 	// Initialize Anthropic handler
 	noModelUpgrade := false
@@ -127,10 +127,10 @@ func main() {
 			noModelUpgrade = enabled
 		}
 	}
-	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache, noModelUpgrade)
+	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache, noModelUpgrade, *debug)
 
 	// Initialize Gemini handler
-	geminiHandler := gemini.NewHandler(authClient, transport, modelsCache)
+	geminiHandler := gemini.NewHandler(authClient, transport, modelsCache, *debug)
 
 	// Set up routes
 	mux := http.NewServeMux()

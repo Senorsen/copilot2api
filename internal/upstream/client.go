@@ -27,6 +27,7 @@ type TokenProvider interface {
 type Client struct {
 	TokenProvider TokenProvider
 	HTTPClient    *http.Client
+	Debug         bool
 }
 
 // NewTransport creates a shared http.Transport suitable for upstream requests.
@@ -45,7 +46,7 @@ func NewTransport() *http.Transport {
 // NewClient creates a new upstream Client.
 // If transport is non-nil it is used for the underlying http.Client;
 // otherwise a new Transport is created.
-func NewClient(tp TokenProvider, transport *http.Transport) *Client {
+func NewClient(tp TokenProvider, transport *http.Transport, debug bool) *Client {
 	if transport == nil {
 		transport = NewTransport()
 	}
@@ -56,6 +57,7 @@ func NewClient(tp TokenProvider, transport *http.Transport) *Client {
 			// Non-streaming requests use per-request context timeouts instead.
 			Transport: transport,
 		},
+		Debug: debug,
 	}
 }
 
@@ -140,7 +142,7 @@ func (c *Client) Do(ctx context.Context, r Request) (*http.Response, []byte, err
 	}
 
 	// Debug log: outgoing request
-	if slog.Default().Enabled(reqCtx, slog.LevelDebug) {
+	if c.Debug {
 		if bodyReader != nil {
 			if br, ok := bodyReader.(*bytes.Reader); ok {
 				rawBytes := make([]byte, br.Len())
