@@ -57,6 +57,23 @@ func resolveModelAlias(modelID string) string {
 	return modelID
 }
 
+// modelUpgradeSuffixes lists suffixes to try (in order) when upgrading a model
+// to the best available variant. The first match wins.
+var modelUpgradeSuffixes = []string{"-1m-internal", "-1m"}
+
+// upgradeModel returns the best available variant of modelID by checking for
+// known suffixes in the upstream model list. Returns the original if no better variant exists.
+func upgradeModel(modelID string, available map[string]*models.Info) string {
+	for _, suffix := range modelUpgradeSuffixes {
+		candidate := modelID + suffix
+		if _, ok := available[candidate]; ok {
+			slog.Debug("auto-upgraded model", "from", modelID, "to", candidate)
+			return candidate
+		}
+	}
+	return modelID
+}
+
 // getModelInfo returns cached model info, fetching from upstream if needed.
 func (h *Handler) getModelInfo(ctx context.Context, modelID string) (*models.Info, bool) {
 	modelID = resolveModelAlias(modelID)
@@ -68,6 +85,19 @@ func (h *Handler) getModelInfo(ctx context.Context, modelID string) (*models.Inf
 	}
 
 	return infoMap[modelID], false
+}
+
+// getModelInfoWithUpgrade is like getModelInfo but also auto-upgrades the model
+// to the best available variant (e.g. appending "-1m-internal" if available).
+func (h *Handler) getModelInfoWithUpgrade(ctx context.Context, modelID string) (string, *models.Info, bool) {
+	infoMap, err := h.models.GetInfo(ctx)
+	if err != nil {
+		slog.Error("failed to fetch models for capability detection", "error", err)
+		return modelID, nil, true
+	}
+
+	upgraded := upgradeModel(modelID, infoMap)
+	return upgraded, infoMap[upgraded], false
 }
 
 func modelSupportsEndpoint(info *models.Info, endpoint string) bool {

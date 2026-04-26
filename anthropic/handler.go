@@ -85,7 +85,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Info("anthropic request", "endpoint", "/v1/messages", "model", anthropicReq.Model, "stream", anthropicReq.Stream, "messages", len(anthropicReq.Messages), "route", route, "duration_ms", time.Since(start).Milliseconds())
 	}()
 
-	modelInfo, capabilityFetchFailed := h.getModelInfo(r.Context(), anthropicReq.Model)
+	upgradedModel, modelInfo, capabilityFetchFailed := h.getModelInfoWithUpgrade(r.Context(), anthropicReq.Model)
+	if upgradedModel != anthropicReq.Model {
+		slog.Debug("auto-upgraded model", "from", anthropicReq.Model, "to", upgradedModel)
+		anthropicReq.Model = upgradedModel
+	}
 
 	if modelSupportsEndpoint(modelInfo, "/v1/messages") {
 		route = "native"
