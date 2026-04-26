@@ -25,10 +25,6 @@ var versionHyphenRe = regexp.MustCompile(`([a-zA-Z]-)(\d)-(\d)([^0-9]|$)`)
 // at the end of a model ID (optionally followed by more digits for timestamps).
 var dateSuffixRe = regexp.MustCompile(`-(\d{8,})$`)
 
-// context1mRe matches the "context-1m" token in the anthropic-beta header,
-// used by Claude Code to signal the 1M context window variant.
-var context1mRe = regexp.MustCompile(`\bcontext-1m\b`)
-
 // resolveModelAlias returns the canonical model ID for Copilot's model list.
 // It applies the following transformations in order:
 //  1. Strip date suffixes (e.g. "-20250514")
@@ -74,30 +70,20 @@ func upgradeModel(modelID string, available map[string]*models.Info) string {
 	return modelID
 }
 
-// getModelInfo returns cached model info, fetching from upstream if needed.
-func (h *Handler) getModelInfo(ctx context.Context, modelID string) (*models.Info, bool) {
-	modelID = resolveModelAlias(modelID)
-
-	infoMap, err := h.models.GetInfo(ctx)
-	if err != nil {
-		slog.Error("failed to fetch models for capability detection", "error", err)
-		return nil, true
-	}
-
-	return infoMap[modelID], false
-}
-
-// getModelInfoWithUpgrade is like getModelInfo but also auto-upgrades the model
+// getModelInfoWithUpgrade fetches model info and auto-upgrades the model
 // to the best available variant (e.g. appending "-1m-internal" if available).
-func (h *Handler) getModelInfoWithUpgrade(ctx context.Context, modelID string) (string, *models.Info, bool) {
+// Set skipUpgrade to true to disable auto-upgrade.
+func (h *Handler) getModelInfoWithUpgrade(ctx context.Context, modelID string, skipUpgrade bool) (string, *models.Info, bool) {
 	infoMap, err := h.models.GetInfo(ctx)
 	if err != nil {
 		slog.Error("failed to fetch models for capability detection", "error", err)
 		return modelID, nil, true
 	}
 
-	upgraded := upgradeModel(modelID, infoMap)
-	return upgraded, infoMap[upgraded], false
+	if !skipUpgrade {
+		modelID = upgradeModel(modelID, infoMap)
+	}
+	return modelID, infoMap[modelID], false
 }
 
 func modelSupportsEndpoint(info *models.Info, endpoint string) bool {

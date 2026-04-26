@@ -121,7 +121,13 @@ func main() {
 	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache)
 
 	// Initialize Anthropic handler
-	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache)
+	noModelUpgrade := false
+	if v := os.Getenv("COPILOT2API_NO_MODEL_UPGRADE"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			noModelUpgrade = enabled
+		}
+	}
+	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache, noModelUpgrade)
 
 	// Initialize Gemini handler
 	geminiHandler := gemini.NewHandler(authClient, transport, modelsCache)

@@ -19,16 +19,18 @@ import (
 
 // Handler handles Anthropic Messages API requests
 type Handler struct {
-	upstream *upstream.Client
-	models   *models.Cache
+	upstream       *upstream.Client
+	models         *models.Cache
+	noModelUpgrade bool
 }
 
 // NewHandler creates a new Anthropic handler.
 // The transport is used for upstream HTTP requests (pass nil to create a new one).
-func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache) *Handler {
+func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache, noModelUpgrade bool) *Handler {
 	return &Handler{
-		upstream: upstream.NewClient(authClient, transport),
-		models:   mc,
+		upstream:       upstream.NewClient(authClient, transport),
+		models:         mc,
+		noModelUpgrade: noModelUpgrade,
 	}
 }
 
@@ -64,16 +66,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Resolve model alias (e.g. claude-haiku-4-5-20251001 -> claude-haiku-4.5)
 	resolvedModel := resolveModelAlias(anthropicReq.Model)
 
-	// Detect 1M context variant: Claude Code signals this via the anthropic-beta
-	// header (e.g. "context-1m-2025-08-07"). Copilot exposes these as separate
-	// model IDs with a "-1m" suffix (e.g. "claude-opus-4.6-1m"), so we append it.
-	if betaHeader := r.Header.Get("anthropic-beta"); betaHeader != "" {
-		if context1mRe.MatchString(betaHeader) && !strings.HasSuffix(resolvedModel, "-1m") {
-			slog.Debug("detected context-1m beta header, appending -1m suffix", "model", resolvedModel)
-			resolvedModel += "-1m"
-		}
-	}
-
 	modelChanged := resolvedModel != anthropicReq.Model
 	if modelChanged {
 		slog.Debug("resolved model alias", "from", anthropicReq.Model, "to", resolvedModel)
@@ -85,7 +77,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Info("anthropic request", "endpoint", "/v1/messages", "model", anthropicReq.Model, "stream", anthropicReq.Stream, "messages", len(anthropicReq.Messages), "route", route, "duration_ms", time.Since(start).Milliseconds())
 	}()
 
-	upgradedModel, modelInfo, capabilityFetchFailed := h.getModelInfoWithUpgrade(r.Context(), anthropicReq.Model)
+	upgradedModel, modelInfo, capabilityFetchFailed := h.getModelInfoWithUpgrade(r.Context(), anthropicReq.Model, h.noModelUpgrade)
 	if upgradedModel != anthropicReq.Model {
 		slog.Debug("auto-upgraded model", "from", anthropicReq.Model, "to", upgradedModel)
 		anthropicReq.Model = upgradedModel
