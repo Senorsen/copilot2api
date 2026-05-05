@@ -12,11 +12,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/control"
 	"github.com/whtsky/copilot2api/gemini"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
@@ -28,6 +30,7 @@ var version = "dev"
 func main() {
 	var (
 		port        = flag.Int("port", 0, "Server port (env: COPILOT2API_PORT, default: 7777)")
+		controlPort = flag.Int("control-port", 0, "Control plane port (env: COPILOT2API_CONTROL_PORT, default: 7778)")
 		host        = flag.String("host", "", "Server host (env: COPILOT2API_HOST, default: 127.0.0.1)")
 		tokenDir    = flag.String("token-dir", "", "Token storage directory (env: COPILOT2API_TOKEN_DIR, default: ~/.config/copilot2api)")
 		showVersion = flag.Bool("version", false, "Show version and exit")
@@ -62,6 +65,16 @@ func main() {
 			*port = 7777
 		}
 	}
+	if *controlPort == 0 {
+		if v := os.Getenv("COPILOT2API_CONTROL_PORT"); v != "" {
+			if p, err := strconv.Atoi(v); err == nil {
+				*controlPort = p
+			}
+		}
+		if *controlPort == 0 {
+			*controlPort = 7778
+		}
+	}
 
 	if *showVersion {
 		fmt.Printf("copilot2api version %s\n", version)
@@ -92,70 +105,82 @@ func main() {
 		}
 	}
 
-	// Initialize auth client (multi-account support)
-	// If token-dir contains subdirectories, each is treated as a separate account.
-	// Otherwise falls back to single-account mode (backward compatible).
-	authClient, err := auth.NewMultiClientFromBaseDir(*tokenDir)
+	// Initialize account manager
+	accountManager, err := auth.NewAccountManager(*tokenDir)
 	if err != nil {
-		slog.Error("failed to initialize auth client", "error", err)
+		slog.Error("failed to initialize account manager", "error", err)
 		os.Exit(1)
 	}
-	slog.Info("initialized accounts", "count", authClient.Count())
+	slog.Info("initialized accounts", "count", accountManager.Count())
 
-	// Ensure we're authenticated before starting the server. This runs the
-	// interactive device flow if needed and verifies a valid Copilot token.
+	// Authenticate all existing accounts at startup
 	ctx := context.Background()
-	if err := authClient.EnsureAuthenticated(ctx); err != nil {
-		slog.Error("authentication failed", "error", err)
-		os.Exit(1)
+	if accountManager.Count() > 0 {
+		if err := accountManager.EnsureAllAuthenticated(ctx); err != nil {
+			slog.Error("authentication failed", "error", err)
+			os.Exit(1)
+		}
 	}
 
-	// Shared HTTP transport for all upstream requests
+	// Shared HTTP transport
 	transport := upstream.NewTransport()
 
-	// Shared models cache — a single fetch populates both raw JSON (for
-	// proxying GET /v1/models) and parsed model info (for capability detection).
-	upstreamClient := upstream.NewClient(authClient, transport)
+	// Default token provider for backward-compatible routes
+	defaultTP := &auth.DefaultTokenProvider{AM: accountManager}
+
+	// Shared models cache using default account
+	upstreamClient := upstream.NewClient(defaultTP, transport)
 	modelsCache := models.NewCache(upstreamClient, 5*time.Minute)
 
-	// Initialize proxy handler
-	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache, authClient)
-
-	// Initialize Anthropic handler
-	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache)
-
-	// Initialize Gemini handler
-	geminiHandler := gemini.NewHandler(authClient, transport, modelsCache)
-
-	// Set up routes
+	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()
 
-	// Core routes
-	mux.Handle("/v1/chat/completions", proxyHandler)
-	mux.Handle("/v1/models", proxyHandler)
-	mux.Handle("/v1/embeddings", proxyHandler)
-	mux.Handle("/v1/responses", proxyHandler)
-	mux.Handle("/v1/messages", anthropicHandler)
-	mux.Handle("/v1beta/models", geminiHandler)
-	mux.Handle("/v1beta/models/", geminiHandler)
-	mux.HandleFunc("/usage", proxyHandler.HandleUsage)
+	// Gemini routes (not under /v1/)
+	mux.HandleFunc("/v1beta/models/", func(w http.ResponseWriter, r *http.Request) {
+		handler := gemini.NewHandler(defaultTP, transport, modelsCache)
+		handler.ServeHTTP(w, r)
+	})
+	mux.HandleFunc("/v1beta/models", func(w http.ResponseWriter, r *http.Request) {
+		handler := gemini.NewHandler(defaultTP, transport, modelsCache)
+		handler.ServeHTTP(w, r)
+	})
 
-	// AmpCode routes — strip /amp prefix so existing handlers see /v1/...
-	mux.Handle("/amp/v1/chat/completions", http.StripPrefix("/amp", proxyHandler))
-	mux.Handle("/amp/v1/models", http.StripPrefix("/amp", proxyHandler))
-	mux.Handle("/amp/v1/responses", http.StripPrefix("/amp", proxyHandler))
-	mux.Handle("/amp/v1/embeddings", http.StripPrefix("/amp", proxyHandler))
+	// Account-specific routes: /v1/{account_id}/...
+	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
+		handleAccountRoute(w, r, accountManager, transport, modelsCache)
+	})
+
+	// AmpCode routes
+	mux.HandleFunc("/amp/", func(w http.ResponseWriter, r *http.Request) {
+		// Strip /amp prefix and route through default account
+		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/amp")
+		handleWithTokenProvider(w, r, defaultTP, transport, modelsCache)
+	})
 
 	// AmpCode provider-specific routes
-	mux.Handle("/api/provider/openai/v1/chat/completions", http.StripPrefix("/api/provider/openai", proxyHandler))
-	mux.Handle("/api/provider/openai/v1/responses", http.StripPrefix("/api/provider/openai", proxyHandler))
-	mux.Handle("/api/provider/openai/v1/models", http.StripPrefix("/api/provider/openai", proxyHandler))
-	mux.Handle("/api/provider/anthropic/v1/messages", http.StripPrefix("/api/provider/anthropic", anthropicHandler))
-	mux.Handle("/api/provider/google/v1beta/models", http.StripPrefix("/api/provider/google", geminiHandler))
-	mux.Handle("/api/provider/google/v1beta/models/", http.StripPrefix("/api/provider/google", geminiHandler))
+	mux.HandleFunc("/api/provider/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		switch {
+		case strings.HasPrefix(path, "/api/provider/openai/"):
+			r.URL.Path = strings.TrimPrefix(path, "/api/provider/openai")
+			handleWithTokenProvider(w, r, defaultTP, transport, modelsCache)
+		case strings.HasPrefix(path, "/api/provider/anthropic/"):
+			r.URL.Path = strings.TrimPrefix(path, "/api/provider/anthropic")
+			handler := anthropic.NewHandler(defaultTP, transport, modelsCache)
+			handler.ServeHTTP(w, r)
+		case strings.HasPrefix(path, "/api/provider/google/"):
+			r.URL.Path = strings.TrimPrefix(path, "/api/provider/google")
+			handler := gemini.NewHandler(defaultTP, transport, modelsCache)
+			handler.ServeHTTP(w, r)
+		default:
+			// AmpCode management — reverse proxy to ampcode.com
+			ampBackend, _ := url.Parse("https://ampcode.com")
+			ampReverseProxy := newAmpReverseProxy(ampBackend)
+			ampReverseProxy.ServeHTTP(w, r)
+		}
+	})
 
-	// AmpCode management — reverse proxy to ampcode.com for auth, threads, etc.
-	// AI inference stays on Copilot API (routes above); only metadata hits ampcode.com.
+	// AmpCode management
 	ampBackend, _ := url.Parse("https://ampcode.com")
 	ampReverseProxy := newAmpReverseProxy(ampBackend)
 	mux.Handle("/api/", ampReverseProxy)
@@ -170,33 +195,53 @@ func main() {
 		http.Redirect(w, r, target, http.StatusFound)
 	})
 
-	// Pre-warm models cache to avoid cold-cache latency on first request
+	// Usage endpoint (aggregates all accounts)
+	mux.HandleFunc("/usage", func(w http.ResponseWriter, r *http.Request) {
+		proxyHandler := proxy.NewHandler(defaultTP, transport, modelsCache, &aggregateUsageProvider{am: accountManager})
+		proxyHandler.HandleUsage(w, r)
+	})
+
+	// Pre-warm models cache
 	go func() {
 		slog.Debug("warming models cache")
 		modelsCache.Warm(ctx)
 		slog.Info("models cache warmed")
 	}()
 
-	// Create server
-	server := &http.Server{
+	// Create proxy server
+	proxyServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", *host, *port),
 		ReadHeaderTimeout: 10 * time.Second,
-		// No ReadTimeout — ReadHeaderTimeout protects against slowloris.
-		// ReadTimeout would kill long-lived SSE streaming connections.
-		IdleTimeout: 120 * time.Second,
-		Handler:     logAllRequests(mux),
+		IdleTimeout:       120 * time.Second,
+		Handler:           logAllRequests(mux),
 	}
 
-	// Start server in goroutine
-	serverErr := make(chan error, 1)
+	// Create control plane server
+	adminToken := os.Getenv("ADMIN_TOKEN")
+	controlServer := control.NewServer(accountManager, adminToken)
+	controlHTTP := &http.Server{
+		Addr:              fmt.Sprintf("%s:%d", *host, *controlPort),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		Handler:           controlServer.Handler(),
+	}
+
+	// Start servers
+	serverErr := make(chan error, 2)
 	go func() {
-		slog.Info("starting server", "host", *host, "port", *port)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		slog.Info("starting proxy server", "host", *host, "port", *port)
+		if err := proxyServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			serverErr <- err
+		}
+	}()
+	go func() {
+		slog.Info("starting control plane server", "host", *host, "port", *controlPort)
+		if err := controlHTTP.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
 		}
 	}()
 
-	// Wait for interrupt signal or server error
+	// Wait for interrupt or error
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	select {
@@ -206,23 +251,102 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("shutting down server")
-
-	// Give the server 30 seconds to finish handling existing requests
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	slog.Info("shutting down servers")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	if err := server.Shutdown(ctx); err != nil {
-		slog.Error("server forced to shutdown", "error", err)
-		os.Exit(1)
-	}
-
-	slog.Info("server stopped")
+	proxyServer.Shutdown(shutdownCtx)
+	controlHTTP.Shutdown(shutdownCtx)
+	slog.Info("servers stopped")
 }
 
-// newAmpReverseProxy creates a reverse proxy to ampcode.com that forwards the
-// client's auth headers. Used for amp CLI management calls (getUserInfo,
-// threads, telemetry, etc.) — no AI credits are consumed.
+// handleAccountRoute routes /v1/{account_id}/... or /v1/... (default account).
+func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.AccountManager, transport *http.Transport, mc *models.Cache) {
+	// Path: /v1/chat/completions, /v1/models, /v1/{account_id}/chat/completions, etc.
+	path := strings.TrimPrefix(r.URL.Path, "/v1/")
+
+	// Known direct endpoints (no account_id prefix)
+	directEndpoints := []string{"chat/completions", "models", "embeddings", "responses", "messages"}
+	for _, ep := range directEndpoints {
+		if path == ep || strings.HasPrefix(path, ep+"/") || strings.HasPrefix(path, ep+"?") {
+			// No account_id → use default
+			client, ok := am.GetDefaultClient()
+			if !ok {
+				proxy.WriteOpenAIError(w, http.StatusServiceUnavailable, proxy.OpenAIErrorTypeServerError, "no accounts configured")
+				return
+			}
+			tp := auth.NewAccountTokenProvider(client)
+			handleWithTokenProvider(w, r, tp, transport, mc)
+			return
+		}
+	}
+
+	// Try to parse as /v1/{account_id}/...
+	parts := strings.SplitN(path, "/", 2)
+	if len(parts) < 2 {
+		proxy.WriteOpenAIError(w, http.StatusNotFound, proxy.OpenAIErrorTypeInvalidRequest, "invalid path")
+		return
+	}
+
+	accountID := parts[0]
+	remainder := parts[1]
+
+	client, ok := am.GetClient(accountID)
+	if !ok {
+		proxy.WriteOpenAIError(w, http.StatusNotFound, proxy.OpenAIErrorTypeInvalidRequest, fmt.Sprintf("account %q not found", accountID))
+		return
+	}
+
+	// Rewrite path to /v1/{remainder}
+	r.URL.Path = "/v1/" + remainder
+	tp := auth.NewAccountTokenProvider(client)
+	handleWithTokenProvider(w, r, tp, transport, mc)
+}
+
+// handleWithTokenProvider dispatches a request using a specific token provider.
+func handleWithTokenProvider(w http.ResponseWriter, r *http.Request, tp upstream.TokenProvider, transport *http.Transport, mc *models.Cache) {
+	path := r.URL.Path
+
+	switch {
+	case path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages"):
+		handler := anthropic.NewHandler(tp, transport, mc)
+		handler.ServeHTTP(w, r)
+	case strings.HasPrefix(path, "/v1beta/models"):
+		handler := gemini.NewHandler(tp, transport, mc)
+		handler.ServeHTTP(w, r)
+	default:
+		handler := proxy.NewHandler(tp, transport, mc, nil)
+		handler.ServeHTTP(w, r)
+	}
+}
+
+// aggregateUsageProvider implements proxy.UsageProvider for all accounts.
+type aggregateUsageProvider struct {
+	am *auth.AccountManager
+}
+
+func (a *aggregateUsageProvider) GetUsageInfo(ctx context.Context) (interface{}, error) {
+	accounts := a.am.ListAccounts()
+	var results []interface{}
+	for _, acc := range accounts {
+		client, ok := a.am.GetClient(acc.ID)
+		if !ok {
+			continue
+		}
+		info, err := client.GetUsageInfo(ctx)
+		if err != nil {
+			continue
+		}
+		results = append(results, info)
+	}
+	if len(results) == 0 {
+		return nil, fmt.Errorf("no usage info available")
+	}
+	if len(results) == 1 {
+		return results[0], nil
+	}
+	return results, nil
+}
+
 func newAmpReverseProxy(target *url.URL) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Director: func(req *http.Request) {

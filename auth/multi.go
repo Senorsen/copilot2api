@@ -6,116 +6,216 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync/atomic"
+	"sync"
 )
 
-// MultiClient manages multiple auth clients and provides round-robin token selection.
-// It implements upstream.TokenProvider.
-type MultiClient struct {
-	clients []*Client
-	counter atomic.Uint64
+// AccountManager manages multiple auth accounts with ID-based lookup.
+// It replaces the old round-robin MultiClient.
+type AccountManager struct {
+	mu       sync.RWMutex
+	accounts map[string]*Client // account_id -> client
+	baseDir  string
+	// defaultID is the account used when no account is specified in path
+	defaultID string
 }
 
-// NewMultiClient creates a multi-account client from a list of token directories.
-// Each directory should contain (or will create) its own credentials.json.
-func NewMultiClient(tokenDirs []string) (*MultiClient, error) {
-	if len(tokenDirs) == 0 {
-		return nil, fmt.Errorf("no token directories provided")
+// NewAccountManager creates an account manager from a base directory.
+// Each subdirectory name is the account_id.
+// If no subdirectories exist but credentials.json is present, creates a "default" account.
+func NewAccountManager(baseDir string) (*AccountManager, error) {
+	if err := os.MkdirAll(baseDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create base directory: %w", err)
 	}
 
-	clients := make([]*Client, 0, len(tokenDirs))
-	for _, dir := range tokenDirs {
-		client, err := NewClient(dir)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize client for %s: %w", dir, err)
-		}
-		clients = append(clients, client)
+	am := &AccountManager{
+		accounts: make(map[string]*Client),
+		baseDir:  baseDir,
 	}
 
-	return &MultiClient{clients: clients}, nil
-}
-
-// NewMultiClientFromBaseDir creates a multi-account client by scanning subdirectories
-// of baseDir. Each subdirectory is treated as a separate account's token directory.
-// If baseDir has no subdirectories but contains credentials.json directly, it falls
-// back to single-account mode (backward compatible).
-func NewMultiClientFromBaseDir(baseDir string) (*MultiClient, error) {
 	entries, err := os.ReadDir(baseDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read base directory %s: %w", baseDir, err)
+		return nil, fmt.Errorf("failed to read base directory: %w", err)
 	}
 
-	var subdirs []string
+	var firstID string
 	for _, entry := range entries {
-		if entry.IsDir() {
-			subdirs = append(subdirs, filepath.Join(baseDir, entry.Name()))
+		if !entry.IsDir() {
+			continue
+		}
+		id := entry.Name()
+		dir := filepath.Join(baseDir, id)
+		client, err := NewClient(dir)
+		if err != nil {
+			slog.Warn("skipping account directory", "id", id, "error", err)
+			continue
+		}
+		am.accounts[id] = client
+		if firstID == "" {
+			firstID = id
 		}
 	}
 
-	// If no subdirectories found, use baseDir itself (single-account backward compat)
-	if len(subdirs) == 0 {
-		return NewMultiClient([]string{baseDir})
+	// Backward compat: if no subdirs but credentials.json exists at baseDir
+	if len(am.accounts) == 0 {
+		credPath := filepath.Join(baseDir, "credentials.json")
+		if _, err := os.Stat(credPath); err == nil {
+			client, err := NewClient(baseDir)
+			if err != nil {
+				return nil, fmt.Errorf("failed to initialize default account: %w", err)
+			}
+			am.accounts["default"] = client
+			firstID = "default"
+		}
 	}
 
-	return NewMultiClient(subdirs)
+	am.defaultID = firstID
+	return am, nil
 }
 
-// EnsureAuthenticated runs device flow for all accounts that need it.
-func (mc *MultiClient) EnsureAuthenticated(ctx context.Context) error {
-	for i, client := range mc.clients {
-		slog.Info("authenticating account", "index", i, "total", len(mc.clients))
+// GetClient returns the client for a given account ID.
+func (am *AccountManager) GetClient(accountID string) (*Client, bool) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	c, ok := am.accounts[accountID]
+	return c, ok
+}
+
+// GetDefaultClient returns the default account client.
+func (am *AccountManager) GetDefaultClient() (*Client, bool) {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	if am.defaultID == "" {
+		return nil, false
+	}
+	c, ok := am.accounts[am.defaultID]
+	return c, ok
+}
+
+// AddAccount adds an authenticated account.
+func (am *AccountManager) AddAccount(id string, client *Client) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	am.accounts[id] = client
+	if am.defaultID == "" {
+		am.defaultID = id
+	}
+}
+
+// RemoveAccount removes an account and deletes its storage directory.
+func (am *AccountManager) RemoveAccount(id string) error {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	if _, ok := am.accounts[id]; !ok {
+		return fmt.Errorf("account %s not found", id)
+	}
+	delete(am.accounts, id)
+	if am.defaultID == id {
+		am.defaultID = ""
+		for k := range am.accounts {
+			am.defaultID = k
+			break
+		}
+	}
+	// Remove storage directory
+	dir := filepath.Join(am.baseDir, id)
+	return os.RemoveAll(dir)
+}
+
+// ListAccounts returns all account IDs and their GitHub usernames.
+func (am *AccountManager) ListAccounts() []AccountInfo {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	var result []AccountInfo
+	for id, client := range am.accounts {
+		info := AccountInfo{
+			ID:        id,
+			IsDefault: id == am.defaultID,
+		}
+		client.mu.RLock()
+		if client.creds.GitHubToken != "" {
+			info.HasToken = true
+		}
+		if client.creds.CopilotToken != nil {
+			info.TokenValid = client.creds.CopilotToken.IsTokenUsable()
+		}
+		client.mu.RUnlock()
+		result = append(result, info)
+	}
+	return result
+}
+
+// AccountInfo is returned by the list endpoint.
+type AccountInfo struct {
+	ID         string `json:"id"`
+	HasToken   bool   `json:"has_token"`
+	TokenValid bool   `json:"token_valid"`
+	IsDefault  bool   `json:"is_default"`
+}
+
+// EnsureAllAuthenticated authenticates all existing accounts at startup.
+func (am *AccountManager) EnsureAllAuthenticated(ctx context.Context) error {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	for id, client := range am.accounts {
+		slog.Info("authenticating account", "id", id)
 		if err := client.EnsureAuthenticated(ctx); err != nil {
-			return fmt.Errorf("account %d authentication failed: %w", i, err)
+			return fmt.Errorf("account %s authentication failed: %w", id, err)
 		}
 	}
 	return nil
 }
 
-// GetToken returns a valid token using round-robin selection across accounts.
-func (mc *MultiClient) GetToken(ctx context.Context) (string, error) {
-	n := uint64(len(mc.clients))
-	start := mc.counter.Add(1) - 1
-	
-	// Try round-robin starting from current counter, fall through on error
-	for i := uint64(0); i < n; i++ {
-		idx := (start + i) % n
-		token, err := mc.clients[idx].GetToken(ctx)
-		if err == nil {
-			return token, nil
-		}
-		slog.Warn("account token unavailable, trying next", "index", idx, "error", err)
-	}
-	return "", fmt.Errorf("all %d accounts failed to provide a valid token", n)
+// Count returns number of accounts.
+func (am *AccountManager) Count() int {
+	am.mu.RLock()
+	defer am.mu.RUnlock()
+	return len(am.accounts)
 }
 
-// GetBaseURL returns the base URL from the current round-robin account.
-func (mc *MultiClient) GetBaseURL() string {
-	n := uint64(len(mc.clients))
-	idx := (mc.counter.Load()) % n
-	return mc.clients[idx].GetBaseURL()
+// BaseDir returns the base directory for account storage.
+func (am *AccountManager) BaseDir() string {
+	return am.baseDir
 }
 
-// GetUsageInfo returns usage info from all accounts (satisfies proxy.UsageProvider).
-func (mc *MultiClient) GetUsageInfo(ctx context.Context) (interface{}, error) {
-	var results []*UsageInfo
-	for _, client := range mc.clients {
-		info, err := client.GetUsageInfo(ctx)
-		if err != nil {
-			slog.Warn("failed to get usage info for account", "error", err)
-			continue
-		}
-		results = append(results, info)
-	}
-	if len(results) == 0 {
-		return nil, fmt.Errorf("failed to get usage info from any account")
-	}
-	if len(results) == 1 {
-		return results[0], nil
-	}
-	return results, nil
+// --- TokenProvider implementation for a specific account ---
+
+// AccountTokenProvider wraps a single Client as an upstream.TokenProvider.
+type AccountTokenProvider struct {
+	client *Client
 }
 
-// Count returns the number of accounts.
-func (mc *MultiClient) Count() int {
-	return len(mc.clients)
+func NewAccountTokenProvider(client *Client) *AccountTokenProvider {
+	return &AccountTokenProvider{client: client}
+}
+
+func (p *AccountTokenProvider) GetToken(ctx context.Context) (string, error) {
+	return p.client.GetToken(ctx)
+}
+
+func (p *AccountTokenProvider) GetBaseURL() string {
+	return p.client.GetBaseURL()
+}
+
+// --- Default/fallback TokenProvider that uses AM's default account ---
+
+// DefaultTokenProvider uses the AccountManager's default account.
+// Satisfies upstream.TokenProvider.
+type DefaultTokenProvider struct {
+	AM *AccountManager
+}
+
+func (d *DefaultTokenProvider) GetToken(ctx context.Context) (string, error) {
+	client, ok := d.AM.GetDefaultClient()
+	if !ok {
+		return "", fmt.Errorf("no default account configured")
+	}
+	return client.GetToken(ctx)
+}
+
+func (d *DefaultTokenProvider) GetBaseURL() string {
+	client, ok := d.AM.GetDefaultClient()
+	if !ok {
+		return DefaultBaseURL
+	}
+	return client.GetBaseURL()
 }
