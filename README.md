@@ -285,3 +285,34 @@ go build -o copilot2api .  # Build
 ## License
 
 MIT
+
+## Multi-Account Support (Fork Feature)
+
+This fork adds support for multiple GitHub Copilot accounts with automatic round-robin load balancing.
+
+### Setup
+
+Create subdirectories in your token directory, one per account:
+
+```
+~/.config/copilot2api/
+├── account1/
+│   └── credentials.json  (auto-created after device flow)
+├── account2/
+│   └── credentials.json
+└── account3/
+    └── credentials.json
+```
+
+On first startup, the device flow will run sequentially for each account that lacks a valid `credentials.json`.
+
+### How It Works
+
+- Requests are distributed across accounts using **round-robin**
+- If one account's token is expired/invalid, the next account is tried automatically
+- Each account refreshes its Copilot token independently
+- The `/usage` endpoint returns info from all accounts
+
+### Backward Compatibility
+
+If the token directory contains no subdirectories (just `credentials.json` at the top level), it behaves exactly like the original single-account version.

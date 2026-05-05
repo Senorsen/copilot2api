@@ -62,11 +62,6 @@ func main() {
 			*port = 7777
 		}
 	}
-	if *tokenDir == "" {
-		if v := os.Getenv("COPILOT2API_TOKEN_DIR"); v != "" {
-			*tokenDir = v
-		}
-	}
 
 	if *showVersion {
 		fmt.Printf("copilot2api version %s\n", version)
@@ -85,20 +80,27 @@ func main() {
 
 	// Determine token directory
 	if *tokenDir == "" {
-		homeDir, err := os.UserHomeDir()
-		if err != nil {
-			slog.Error("failed to get home directory", "error", err)
-			os.Exit(1)
+		if v := os.Getenv("COPILOT2API_TOKEN_DIR"); v != "" {
+			*tokenDir = v
+		} else {
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				slog.Error("failed to get home directory", "error", err)
+				os.Exit(1)
+			}
+			*tokenDir = filepath.Join(homeDir, ".config", "copilot2api")
 		}
-		*tokenDir = filepath.Join(homeDir, ".config", "copilot2api")
 	}
 
-	// Initialize auth client
-	authClient, err := auth.NewClient(*tokenDir)
+	// Initialize auth client (multi-account support)
+	// If token-dir contains subdirectories, each is treated as a separate account.
+	// Otherwise falls back to single-account mode (backward compatible).
+	authClient, err := auth.NewMultiClientFromBaseDir(*tokenDir)
 	if err != nil {
 		slog.Error("failed to initialize auth client", "error", err)
 		os.Exit(1)
 	}
+	slog.Info("initialized accounts", "count", authClient.Count())
 
 	// Ensure we're authenticated before starting the server. This runs the
 	// interactive device flow if needed and verifies a valid Copilot token.
@@ -117,7 +119,7 @@ func main() {
 	modelsCache := models.NewCache(upstreamClient, 5*time.Minute)
 
 	// Initialize proxy handler
-	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache)
+	proxyHandler := proxy.NewHandler(authClient, transport, modelsCache, authClient)
 
 	// Initialize Anthropic handler
 	anthropicHandler := anthropic.NewHandler(authClient, transport, modelsCache)

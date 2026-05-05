@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,26 +11,31 @@ import (
 	"strings"
 	"time"
 
-	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/sse"
 	"github.com/whtsky/copilot2api/internal/types"
 	"github.com/whtsky/copilot2api/internal/upstream"
 )
 
+// UsageProvider can return usage information for the /usage endpoint.
+type UsageProvider interface {
+	GetUsageInfo(ctx context.Context) (interface{}, error)
+}
+
 type Handler struct {
-	upstream    *upstream.Client
-	authClient  *auth.Client
-	modelsCache *models.Cache
+	upstream      *upstream.Client
+	usageProvider UsageProvider
+	modelsCache   *models.Cache
 }
 
 // NewHandler creates a new proxy handler.
 // The transport is used for upstream HTTP requests (pass nil to create a new one).
-func NewHandler(authClient *auth.Client, transport *http.Transport, mc *models.Cache) *Handler {
+// usageProvider may be nil if /usage is not needed.
+func NewHandler(tokenProvider upstream.TokenProvider, transport *http.Transport, mc *models.Cache, usageProvider UsageProvider) *Handler {
 	return &Handler{
-		upstream:    upstream.NewClient(authClient, transport),
-		authClient:  authClient,
-		modelsCache: mc,
+		upstream:      upstream.NewClient(tokenProvider, transport),
+		usageProvider: usageProvider,
+		modelsCache:   mc,
 	}
 }
 
@@ -367,7 +373,11 @@ func (h *Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	usage, err := h.authClient.GetUsageInfo(r.Context())
+	if h.usageProvider == nil {
+		WriteOpenAIError(w, http.StatusNotImplemented, OpenAIErrorTypeServerError, "Usage info not available")
+		return
+	}
+	usage, err := h.usageProvider.GetUsageInfo(r.Context())
 	if err != nil {
 		slog.Error("failed to get usage info", "error", err)
 		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to get usage info")
