@@ -123,8 +123,19 @@ func main() {
 	// Shared HTTP transport
 	transport := upstream.NewTransport()
 
-	// Models cache will be populated per-request with account-specific clients
-	modelsCache := models.NewCache(nil, 5*time.Minute)
+	// Models cache — use first available account for fetching models list
+	var modelsCache *models.Cache
+	accounts := accountManager.ListAccounts()
+	if len(accounts) > 0 {
+		if client, ok := accountManager.GetClient(accounts[0].ID); ok {
+			tp := auth.NewAccountTokenProvider(client)
+			upstreamClient := upstream.NewClient(tp, transport)
+			modelsCache = models.NewCache(upstreamClient, 5*time.Minute)
+		}
+	}
+	if modelsCache == nil {
+		modelsCache = models.NewCache(nil, 5*time.Minute)
+	}
 
 	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()
