@@ -1,0 +1,9 @@
+FROM busybox:latest
+COPY dist/copilot2api-linux-amd64 /copilot2api
+COPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+ENV HOME=/root
+ENV COPILOT2API_HOST=0.0.0.0
+ENV COPILOT2API_PORT=7777
+ENV COPILOT2API_CONTROL_PORT=7778
+EXPOSE 7777 7778
+ENTRYPOINT ["/copilot2api"]

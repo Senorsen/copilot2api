@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,16 @@ import (
 
 	"github.com/whtsky/copilot2api/auth"
 )
+
+// generateUUID generates a random UUID v4 string.
+func generateUUID() string {
+	var buf [16]byte
+	_, _ = rand.Read(buf[:])
+	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
+	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
+}
 
 // Server is the control plane HTTP server (port 7778).
 type Server struct {
@@ -163,7 +174,7 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 	}
 
 	// Create account directory and client
-	accountID := fmt.Sprintf("%d", time.Now().UnixMilli())
+	accountID := generateUUID()
 	accountDir := filepath.Join(s.am.BaseDir(), accountID)
 	if err := os.MkdirAll(accountDir, 0700); err != nil {
 		s.mu.Lock()
