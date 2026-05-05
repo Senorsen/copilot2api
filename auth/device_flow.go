@@ -107,6 +107,34 @@ func PollForAccessToken(deviceCode string, interval int, timeout time.Duration) 
 	}
 }
 
+// FetchGitHubUsername fetches the authenticated user's login from GitHub API.
+func FetchGitHubUsername(accessToken string) (string, error) {
+	req, err := http.NewRequest("GET", "https://api.github.com/user", nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := sharedHTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch GitHub user: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub user API returned status %d", resp.StatusCode)
+	}
+
+	var user struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
+		return "", fmt.Errorf("failed to parse GitHub user response: %w", err)
+	}
+	return user.Login, nil
+}
+
 func checkAccessToken(deviceCode string) (string, error) {
 	data := url.Values{
 		"client_id":   {GitHubClientID},

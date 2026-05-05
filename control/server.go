@@ -30,6 +30,8 @@ type pendingFlow struct {
 	Interval        int    `json:"-"`
 	ExpiresIn       int    `json:"-"`
 	AccountID       string `json:"account_id,omitempty"`
+	GitHubUsername  string `json:"github_username,omitempty"`
+	UsernameSuffix  string `json:"-"`
 	Status          string `json:"status"` // pending, completed, expired, error
 	Error           string `json:"error,omitempty"`
 	cancel          context.CancelFunc
@@ -78,6 +80,14 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Parse optional request body
+	var reqBody struct {
+		UsernameSuffix string `json:"username_suffix"`
+	}
+	if r.Body != nil {
+		json.NewDecoder(r.Body).Decode(&reqBody)
+	}
+
 	// Initiate device flow
 	deviceResp, err := auth.InitiateDeviceFlow()
 	if err != nil {
@@ -96,6 +106,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		VerificationURI: deviceResp.VerificationURI,
 		Interval:        deviceResp.Interval,
 		ExpiresIn:       deviceResp.ExpiresIn,
+		UsernameSuffix:  reqBody.UsernameSuffix,
 		Status:          "pending",
 		cancel:          cancel,
 	}
@@ -131,6 +142,26 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 		return
 	}
 
+	// Fetch GitHub username
+	username, err := auth.FetchGitHubUsername(accessToken)
+	if err != nil {
+		slog.Warn("failed to fetch GitHub username", "error", err)
+		username = ""
+	}
+
+	// Check username_suffix restriction
+	if flow.UsernameSuffix != "" && username != "" {
+		if !strings.HasSuffix(username, flow.UsernameSuffix) {
+			s.mu.Lock()
+			flow.Status = "error"
+			flow.Error = fmt.Sprintf("username %q does not end with required suffix %q", username, flow.UsernameSuffix)
+			flow.GitHubUsername = username
+			s.mu.Unlock()
+			slog.Warn("rejected account due to username suffix mismatch", "username", username, "required_suffix", flow.UsernameSuffix)
+			return
+		}
+	}
+
 	// Create account directory and client
 	accountID := fmt.Sprintf("%d", time.Now().UnixMilli())
 	accountDir := filepath.Join(s.am.BaseDir(), accountID)
@@ -151,7 +182,7 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 		s.mu.Unlock()
 		return
 	}
-	creds := &auth.StoredCredentials{GitHubToken: accessToken}
+	creds := &auth.StoredCredentials{GitHubToken: accessToken, GitHubUsername: username}
 	if err := storage.SaveCredentials(creds); err != nil {
 		s.mu.Lock()
 		flow.Status = "error"
@@ -182,6 +213,7 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 	s.mu.Lock()
 	flow.Status = "completed"
 	flow.AccountID = accountID
+	flow.GitHubUsername = username
 	s.mu.Unlock()
 
 	slog.Info("new account added via control plane", "account_id", accountID)
@@ -227,6 +259,9 @@ func (s *Server) handleFlowStatus(w http.ResponseWriter, r *http.Request, progre
 	}
 	if flow.AccountID != "" {
 		resp["account_id"] = flow.AccountID
+	}
+	if flow.GitHubUsername != "" {
+		resp["github_username"] = flow.GitHubUsername
 	}
 	if flow.Error != "" {
 		resp["error"] = flow.Error

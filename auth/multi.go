@@ -135,6 +135,9 @@ func (am *AccountManager) ListAccounts() []AccountInfo {
 		if client.creds.GitHubToken != "" {
 			info.HasToken = true
 		}
+		if client.creds.GitHubUsername != "" {
+			info.GitHubUsername = client.creds.GitHubUsername
+		}
 		if client.creds.CopilotToken != nil {
 			info.TokenValid = client.creds.CopilotToken.IsTokenUsable()
 		}
@@ -146,10 +149,11 @@ func (am *AccountManager) ListAccounts() []AccountInfo {
 
 // AccountInfo is returned by the list endpoint.
 type AccountInfo struct {
-	ID         string `json:"id"`
-	HasToken   bool   `json:"has_token"`
-	TokenValid bool   `json:"token_valid"`
-	IsDefault  bool   `json:"is_default"`
+	ID             string `json:"id"`
+	GitHubUsername string `json:"github_username,omitempty"`
+	HasToken       bool   `json:"has_token"`
+	TokenValid     bool   `json:"token_valid"`
+	IsDefault      bool   `json:"is_default"`
 }
 
 // EnsureAllAuthenticated authenticates all existing accounts at startup.

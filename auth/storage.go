@@ -12,8 +12,9 @@ type TokenStorage struct {
 }
 
 type StoredCredentials struct {
-	GitHubToken  string       `json:"github_token"`
-	CopilotToken *CopilotToken `json:"copilot_token,omitempty"`
+	GitHubToken    string        `json:"github_token"`
+	GitHubUsername string        `json:"github_username,omitempty"`
+	CopilotToken   *CopilotToken `json:"copilot_token,omitempty"`
 }
 
 // NewTokenStorage creates a new token storage instance
