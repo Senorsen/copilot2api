@@ -37,3 +37,5 @@ __debug_bin*
 .env
 .env.*
 copilot2api-darwin-arm64
+-e dist/
+etc/
