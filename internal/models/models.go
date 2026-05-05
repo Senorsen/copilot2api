@@ -116,6 +116,9 @@ func (c *Cache) get(ctx context.Context) ([]byte, map[string]*Info, error) {
 }
 
 func (c *Cache) fetch(ctx context.Context) (cacheData, error) {
+	if c.upstream == nil {
+		return cacheData{}, fmt.Errorf("no upstream client configured for models cache")
+	}
 	_, respData, err := c.upstream.Do(ctx, upstream.Request{
 		Method:   "GET",
 		Endpoint: "/models",

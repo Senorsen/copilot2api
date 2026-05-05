@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -125,88 +123,51 @@ func main() {
 	// Shared HTTP transport
 	transport := upstream.NewTransport()
 
-	// Default token provider for backward-compatible routes
-	defaultTP := &auth.DefaultTokenProvider{AM: accountManager}
-
-	// Shared models cache using default account
-	upstreamClient := upstream.NewClient(defaultTP, transport)
-	modelsCache := models.NewCache(upstreamClient, 5*time.Minute)
+	// Models cache will be populated per-request with account-specific clients
+	modelsCache := models.NewCache(nil, 5*time.Minute)
 
 	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()
 
-	// Gemini routes (not under /v1/)
-	mux.HandleFunc("/v1beta/models/", func(w http.ResponseWriter, r *http.Request) {
-		handler := gemini.NewHandler(defaultTP, transport, modelsCache)
-		handler.ServeHTTP(w, r)
-	})
-	mux.HandleFunc("/v1beta/models", func(w http.ResponseWriter, r *http.Request) {
-		handler := gemini.NewHandler(defaultTP, transport, modelsCache)
-		handler.ServeHTTP(w, r)
-	})
-
-	// Account-specific routes: /v1/{account_id}/...
+	// All API routes require account_id: /v1/{account_id}/...
 	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
 		handleAccountRoute(w, r, accountManager, transport, modelsCache)
 	})
 
-	// AmpCode routes
-	mux.HandleFunc("/amp/", func(w http.ResponseWriter, r *http.Request) {
-		// Strip /amp prefix and route through default account
-		r.URL.Path = strings.TrimPrefix(r.URL.Path, "/amp")
-		handleWithTokenProvider(w, r, defaultTP, transport, modelsCache)
-	})
-
-	// AmpCode provider-specific routes
-	mux.HandleFunc("/api/provider/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		switch {
-		case strings.HasPrefix(path, "/api/provider/openai/"):
-			r.URL.Path = strings.TrimPrefix(path, "/api/provider/openai")
-			handleWithTokenProvider(w, r, defaultTP, transport, modelsCache)
-		case strings.HasPrefix(path, "/api/provider/anthropic/"):
-			r.URL.Path = strings.TrimPrefix(path, "/api/provider/anthropic")
-			handler := anthropic.NewHandler(defaultTP, transport, modelsCache)
-			handler.ServeHTTP(w, r)
-		case strings.HasPrefix(path, "/api/provider/google/"):
-			r.URL.Path = strings.TrimPrefix(path, "/api/provider/google")
-			handler := gemini.NewHandler(defaultTP, transport, modelsCache)
-			handler.ServeHTTP(w, r)
-		default:
-			// AmpCode management — reverse proxy to ampcode.com
-			ampBackend, _ := url.Parse("https://ampcode.com")
-			ampReverseProxy := newAmpReverseProxy(ampBackend)
-			ampReverseProxy.ServeHTTP(w, r)
+	// Gemini routes also require account_id: /v1beta/{account_id}/models/...
+	mux.HandleFunc("/v1beta/", func(w http.ResponseWriter, r *http.Request) {
+		path := strings.TrimPrefix(r.URL.Path, "/v1beta/")
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) < 2 {
+			proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /v1beta/{account_id}/models/...")
+			return
 		}
-	})
-
-	// AmpCode management
-	ampBackend, _ := url.Parse("https://ampcode.com")
-	ampReverseProxy := newAmpReverseProxy(ampBackend)
-	mux.Handle("/api/", ampReverseProxy)
-	mux.HandleFunc("/amp/v1/login", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "https://ampcode.com/login", http.StatusFound)
-	})
-	mux.HandleFunc("/amp/auth/cli-login", func(w http.ResponseWriter, r *http.Request) {
-		target := "https://ampcode.com/auth/cli-login"
-		if r.URL.RawQuery != "" {
-			target += "?" + r.URL.RawQuery
+		accountID := parts[0]
+		client, ok := accountManager.GetClient(accountID)
+		if !ok {
+			proxy.WriteOpenAIError(w, http.StatusNotFound, proxy.OpenAIErrorTypeInvalidRequest, fmt.Sprintf("account %q not found", accountID))
+			return
 		}
-		http.Redirect(w, r, target, http.StatusFound)
+		r.URL.Path = "/v1beta/" + parts[1]
+		tp := auth.NewAccountTokenProvider(client)
+		handler := gemini.NewHandler(tp, transport, modelsCache)
+		handler.ServeHTTP(w, r)
 	})
 
 	// Usage endpoint (aggregates all accounts)
 	mux.HandleFunc("/usage", func(w http.ResponseWriter, r *http.Request) {
-		proxyHandler := proxy.NewHandler(defaultTP, transport, modelsCache, &aggregateUsageProvider{am: accountManager})
+		// Pick first available account for usage
+		accounts := accountManager.ListAccounts()
+		if len(accounts) == 0 {
+			proxy.WriteOpenAIError(w, http.StatusServiceUnavailable, proxy.OpenAIErrorTypeServerError, "no accounts configured")
+			return
+		}
+		client, _ := accountManager.GetClient(accounts[0].ID)
+		tp := auth.NewAccountTokenProvider(client)
+		proxyHandler := proxy.NewHandler(tp, transport, modelsCache, &aggregateUsageProvider{am: accountManager})
 		proxyHandler.HandleUsage(w, r)
 	})
 
-	// Pre-warm models cache
-	go func() {
-		slog.Debug("warming models cache")
-		modelsCache.Warm(ctx)
-		slog.Info("models cache warmed")
-	}()
 
 	// Create proxy server
 	proxyServer := &http.Server{
@@ -259,31 +220,14 @@ func main() {
 	slog.Info("servers stopped")
 }
 
-// handleAccountRoute routes /v1/{account_id}/... or /v1/... (default account).
+// handleAccountRoute routes /v1/{account_id}/... — account_id is always required.
 func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.AccountManager, transport *http.Transport, mc *models.Cache) {
-	// Path: /v1/chat/completions, /v1/models, /v1/{account_id}/chat/completions, etc.
 	path := strings.TrimPrefix(r.URL.Path, "/v1/")
 
-	// Known direct endpoints (no account_id prefix)
-	directEndpoints := []string{"chat/completions", "models", "embeddings", "responses", "messages"}
-	for _, ep := range directEndpoints {
-		if path == ep || strings.HasPrefix(path, ep+"/") || strings.HasPrefix(path, ep+"?") {
-			// No account_id → use default
-			client, ok := am.GetDefaultClient()
-			if !ok {
-				proxy.WriteOpenAIError(w, http.StatusServiceUnavailable, proxy.OpenAIErrorTypeServerError, "no accounts configured")
-				return
-			}
-			tp := auth.NewAccountTokenProvider(client)
-			handleWithTokenProvider(w, r, tp, transport, mc)
-			return
-		}
-	}
-
-	// Try to parse as /v1/{account_id}/...
+	// Parse as /v1/{account_id}/...
 	parts := strings.SplitN(path, "/", 2)
-	if len(parts) < 2 {
-		proxy.WriteOpenAIError(w, http.StatusNotFound, proxy.OpenAIErrorTypeInvalidRequest, "invalid path")
+	if len(parts) < 2 || parts[1] == "" {
+		proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /v1/{account_id}/chat/completions")
 		return
 	}
 
@@ -345,17 +289,6 @@ func (a *aggregateUsageProvider) GetUsageInfo(ctx context.Context) (interface{},
 		return results[0], nil
 	}
 	return results, nil
-}
-
-func newAmpReverseProxy(target *url.URL) *httputil.ReverseProxy {
-	return &httputil.ReverseProxy{
-		Director: func(req *http.Request) {
-			slog.Debug("amp proxy", "method", req.Method, "path", req.URL.Path, "query", req.URL.RawQuery)
-			req.URL.Scheme = target.Scheme
-			req.URL.Host = target.Host
-			req.Host = target.Host
-		},
-	}
 }
 
 func logAllRequests(next http.Handler) http.Handler {
