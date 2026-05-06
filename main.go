@@ -292,7 +292,8 @@ func (a *aggregateUsageProvider) GetUsageInfo(ctx context.Context) (interface{},
 func apiTokenAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer "+token {
+		xApiKey := r.Header.Get("x-api-key")
+		if auth != "Bearer "+token && xApiKey != token {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":{"message":"invalid or missing API_TOKEN","type":"authentication_error","code":"unauthorized"}}`))
