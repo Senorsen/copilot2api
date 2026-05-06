@@ -432,7 +432,9 @@ func (h *Handler) streamSSE(w http.ResponseWriter, body io.Reader, translate sse
 			continue
 		}
 		if dataStr == "[DONE]" {
-			break
+			// [DONE] is not part of the Anthropic SSE spec; treat it as
+			// a clean stream end (same as translator signalling done).
+			return true
 		}
 		sseEvent.Data = dataStr // pass pre-trimmed data to translator
 
