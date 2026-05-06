@@ -145,17 +145,7 @@ func main() {
 		handleAccountRoute(w, r, accountManager, transport, modelsCache)
 	})
 
-	// Old /v1/ path without account_id — return error
-	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
-		proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /api/{account_id}/v1/...")
-		return
-	})
 
-	// Old /v1beta/ path without account_id — return error
-	mux.HandleFunc("/v1beta/", func(w http.ResponseWriter, r *http.Request) {
-		proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /api/{account_id}/v1beta/...")
-		return
-	})
 
 	// Usage endpoint (aggregates all accounts)
 	mux.HandleFunc("/usage", func(w http.ResponseWriter, r *http.Request) {
