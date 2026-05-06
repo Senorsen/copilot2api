@@ -172,6 +172,13 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 		for {
 			line, err := reader.ReadBytes('\n')
 			if len(line) > 0 {
+				// Filter out "data: [DONE]" which is not part of the Anthropic SSE spec
+				if strings.TrimSpace(string(line)) == "data: [DONE]" {
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					continue
+				}
 				if _, writeErr := w.Write(line); writeErr != nil {
 					slog.Error("failed to write native /messages stream", "error", writeErr)
 					return
