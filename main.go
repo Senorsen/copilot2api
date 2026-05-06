@@ -162,12 +162,16 @@ func main() {
 	})
 
 
-	// Create proxy server
+	// Create proxy server with optional API_TOKEN auth
+	var proxyHandler http.Handler = logAllRequests(mux)
+	if apiToken := os.Getenv("API_TOKEN"); apiToken != "" {
+		proxyHandler = apiTokenAuth(apiToken, proxyHandler)
+	}
 	proxyServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", *host, *port),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		Handler:           logAllRequests(mux),
+		Handler:           proxyHandler,
 	}
 
 	// Create control plane server
@@ -283,6 +287,19 @@ func (a *aggregateUsageProvider) GetUsageInfo(ctx context.Context) (interface{},
 		return results[0], nil
 	}
 	return results, nil
+}
+
+func apiTokenAuth(token string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := r.Header.Get("Authorization")
+		if auth != "Bearer "+token {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":{"message":"invalid or missing API_TOKEN","type":"authentication_error","code":"unauthorized"}}`))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func logAllRequests(next http.Handler) http.Handler {
