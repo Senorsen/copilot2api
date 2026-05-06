@@ -75,7 +75,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// header (e.g. "context-1m-2025-08-07"). Copilot exposes these as separate
 	// model IDs with a "-1m" suffix (e.g. "claude-opus-4.6-1m"), so we append it.
 	if betaHeader := r.Header.Get("anthropic-beta"); betaHeader != "" {
-		if context1mRe.MatchString(betaHeader) && !strings.HasSuffix(resolvedModel, "-1m") {
+		if context1mRe.MatchString(betaHeader) && !strings.Contains(resolvedModel, "-1m") {
 			slog.Debug("detected context-1m beta header, appending -1m suffix", "model", resolvedModel)
 			resolvedModel += "-1m"
 		}
