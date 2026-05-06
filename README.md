@@ -5,15 +5,18 @@ A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthrop
 ## Features
 
 - **OpenAI API Compatible**: `/v1/chat/completions`, `/v1/models`, `/v1/embeddings`, `/v1/responses`
-- **Embeddings Support**: Native OpenAI-compatible `/v1/embeddings` endpoint
-- **Anthropic API Compatible**: `/v1/messages`
-- **Gemini API Compatible**: `/v1beta/models`, `/v1beta/models/{model}:generateContent`, `/v1beta/models/{model}:streamGenerateContent`, `/v1beta/models/{model}:countTokens`
-- **AmpCode Compatible**: `/amp/v1/*` routes for chat, `/api/provider/*` for provider-specific calls, management proxied to `ampcode.com`
-- **Streaming Support**: Full SSE streaming for both OpenAI and Anthropic formats
-- **Anthropic Routing**: Uses native `/v1/messages` when the model supports it, otherwise routes via `/responses` or `/chat/completions`
+- **Anthropic API Compatible**: `/v1/messages`, `/v1/messages/count_tokens`
+- **Gemini API Compatible**: `/v1beta/models`, `/v1beta/models/{model}:generateContent`, etc.
+- **AmpCode Compatible**: `/amp/v1/*` routes
+- **Streaming Support**: Full SSE streaming for OpenAI and Anthropic formats
 - **Auto Authentication**: GitHub Device Flow OAuth with automatic token refresh
+- **Prompt Caching**: `cache_control` fields are passed through transparently
+- **1M Context**: `anthropic-beta: context-1m-*` header auto-appends `-1m` to model ID
+- **Thinking Mode**: `thinking.type: "enabled"` is rewritten to `"adaptive"` for Claude Code compatibility
 - **Usage Monitoring**: Built-in `/usage` endpoint for quota tracking
-- **Models Cache**: 5-minute cache for `/v1/models` and Anthropic model capability lookups
+- **Multi-Account** *(fork feature)*: One process manages multiple Copilot accounts with a Control Plane API
+
+---
 
 ## Quick Start
 
@@ -22,11 +25,12 @@ A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthrop
 ```bash
 docker run -it --rm \
   -p 127.0.0.1:7777:7777 \
+  -p 127.0.0.1:7778:7778 \
   -v ~/.config/copilot2api:/root/.config/copilot2api \
-  ghcr.io/whtsky/copilot2api:latest
+  -e API_TOKEN=your-api-token-here \
+  -e ADMIN_TOKEN=your-admin-token-here \
+  ghcr.io/senorsen/copilot2api:latest
 ```
-
-The volume mount persists your GitHub credentials across container restarts. The examples publish the port on `127.0.0.1` only so the proxy stays local by default.
 
 <details>
 <summary>Docker Compose</summary>
@@ -34,58 +38,182 @@ The volume mount persists your GitHub credentials across container restarts. The
 ```yaml
 services:
   copilot2api:
-    image: ghcr.io/whtsky/copilot2api:latest
+    image: ghcr.io/senorsen/copilot2api:latest
     ports:
       - "127.0.0.1:7777:7777"
+      - "127.0.0.1:7778:7778"
     volumes:
       - ${HOME}/.config/copilot2api:/root/.config/copilot2api
-```
-
-Start it with:
-
-```bash
-docker compose up
+    environment:
+      API_TOKEN: your-api-token-here
+      ADMIN_TOKEN: your-admin-token-here
 ```
 
 </details>
 
-### Download a release binary
+### Binary
 
 ```bash
-# Example: macOS Apple Silicon
+# Linux x64
 curl -L -o copilot2api \
-  https://github.com/whtsky/copilot2api/releases/latest/download/copilot2api-darwin-arm64
-
-# Example: Linux x64
-# curl -L -o copilot2api \
-#   https://github.com/whtsky/copilot2api/releases/latest/download/copilot2api-linux-amd64
-
+  https://github.com/Senorsen/copilot2api/releases/latest/download/copilot2api-linux-amd64
 chmod +x copilot2api
-./copilot2api
+
+API_TOKEN=your-api-token-here ADMIN_TOKEN=your-admin-token-here ./copilot2api
 ```
 
-Download the asset that matches your platform from [GitHub Releases](https://github.com/whtsky/copilot2api/releases/latest). Published binaries use names like `copilot2api-linux-amd64`, `copilot2api-linux-arm64`, `copilot2api-darwin-amd64`, `copilot2api-darwin-arm64`, `copilot2api-windows-amd64.exe`, and `copilot2api-windows-arm64.exe`.
+---
 
-On first run, both Docker and downloaded binaries prompt GitHub Device Flow authentication:
+## Multi-Account Architecture *(fork feature)*
+
+This fork manages **multiple GitHub Copilot accounts** in a single process. Each account has its own credentials stored under a UUID v4 directory:
 
 ```
-🔐 GitHub Authentication Required
-Please visit: https://github.com/login/device
-Enter code: XXXX-XXXX
-
-Waiting for authorization...
-✅ Authentication successful!
+~/.config/copilot2api/
+├── 550e8400-e29b-41d4-a716-446655440000/
+│   └── credentials.json   ← auto-created after device flow
+├── 6ba7b810-9dad-11d1-80b4-00c04fd430c8/
+│   └── credentials.json
+└── ...
 ```
 
-Server starts on `http://127.0.0.1:7777` by default.
+Accounts are managed via the **Control Plane API** (port 7778). The **Data Plane API** (port 7777) routes requests to a specific account by account ID in the URL.
 
-## Security
+---
 
-⚠️ **This proxy is designed for local development only.**
+## Data Plane API — Port 7777
 
-- Does **not** implement API key validation — any request is accepted
-- Do not expose publicly — it becomes an open proxy consuming your Copilot quota
-- Credentials are stored in `~/.config/copilot2api/credentials.json`
+All inference requests go through this port. The URL includes the account ID:
+
+```
+/api/{account_id}/v1/...
+```
+
+### Endpoints
+
+| Path | Method | Description |
+|------|--------|-------------|
+| `/api/{account_id}/v1/messages` | POST | Anthropic Messages API |
+| `/api/{account_id}/v1/messages/count_tokens` | POST | Anthropic token counting |
+| `/api/{account_id}/v1/chat/completions` | POST | OpenAI Chat Completions |
+| `/api/{account_id}/v1/models` | GET | List available models |
+| `/api/{account_id}/v1/*` | ANY | Other paths are proxied as-is |
+| `/usage` | GET | Quota info across all accounts |
+
+Legacy single-account paths (`/v1/messages`, `/v1/chat/completions`, etc.) are still supported for backward compatibility.
+
+### Authentication
+
+Set `API_TOKEN` environment variable. Requests must include one of:
+
+```
+Authorization: Bearer your-api-token-here
+x-api-key: your-api-token-here
+```
+
+If `API_TOKEN` is empty, authentication is skipped (dev mode).
+
+### Example
+
+```bash
+# Anthropic Messages via account ID
+curl http://localhost:7777/api/550e8400-e29b-41d4-a716-446655440000/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-token-here" \
+  -d '{"model":"claude-sonnet-4.6","messages":[{"role":"user","content":"Hello!"}],"max_tokens":100}'
+
+# OpenAI Chat Completions via account ID
+curl http://localhost:7777/api/550e8400-e29b-41d4-a716-446655440000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-api-token-here" \
+  -d '{"model":"gpt-4o","messages":[{"role":"user","content":"Hello!"}]}'
+```
+
+---
+
+## Control Plane API — Port 7778
+
+Account management runs on a separate port. All endpoints require:
+
+```
+Authorization: Bearer your-admin-token-here
+```
+
+Set `ADMIN_TOKEN` environment variable. If empty, authentication is skipped (dev mode).
+
+### Endpoints
+
+#### Add a new account
+
+```
+POST /accounts/login
+```
+
+Initiates GitHub Device Flow. Returns a `progress_id` and the device code URL.
+
+Optional body:
+```json
+{ "username_suffix": "@yourorg.com" }
+```
+
+Use `username_suffix` to restrict which GitHub account can complete the flow.
+
+Response:
+```json
+{
+  "progress_id": "...",
+  "user_code": "XXXX-XXXX",
+  "verification_uri": "https://github.com/login/device"
+}
+```
+
+#### Poll login progress
+
+```
+GET /accounts/{progress_id}/status
+```
+
+Poll until `status` is `"done"`. On completion, returns the `account_id` (UUID) and `github_username`.
+
+```json
+{
+  "status": "done",
+  "account_id": "550e8400-e29b-41d4-a716-446655440000",
+  "github_username": "yourname"
+}
+```
+
+#### List all accounts
+
+```
+GET /accounts
+```
+
+Returns all registered accounts with their GitHub username and account ID.
+
+#### Delete an account
+
+```
+DELETE /accounts/{account_id}
+```
+
+Removes the account and its credentials from disk.
+
+---
+
+## Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `API_TOKEN` | Data plane auth token (optional) | — |
+| `ADMIN_TOKEN` | Control plane auth token (optional) | — |
+| `COPILOT2API_TOKEN_DIR` | Credentials storage directory | `~/.config/copilot2api` |
+| `COPILOT2API_HOST` | Server host | `127.0.0.1` |
+| `COPILOT2API_PORT` | Data plane port | `7777` |
+| `COPILOT2API_ADMIN_PORT` | Control plane port | `7778` |
+| `COPILOT2API_DEBUG` | Enable debug logging | `false` |
+
+---
 
 ## Usage with Claude Code
 
@@ -94,25 +222,24 @@ Add to `~/.claude/settings.json`:
 ```json
 {
   "env": {
-    "ANTHROPIC_BASE_URL": "http://127.0.0.1:7777",
-    "ANTHROPIC_API_KEY": "dummy",
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:7777/api/your-account-id-here",
+    "ANTHROPIC_API_KEY": "your-api-token-here",
     "ANTHROPIC_MODEL": "claude-opus-4.6",
     "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-4.5",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
-  },
-  "permissions": {
-    "deny": [
-      "WebSearch"
-    ]
   }
 }
 ```
 
 ### 1M Context Window
 
-copilot2api supports Claude 1M context models. When Claude Code sends the `anthropic-beta: context-1m-...` header, the proxy automatically appends `-1m` to the model ID (e.g. `claude-opus-4.6` → `claude-opus-4.6-1m`) so Copilot routes to the 1M variant.
+When Claude Code sends the `anthropic-beta: context-1m-...` header, copilot2api automatically appends `-1m` to the model ID (e.g. `claude-opus-4.6` → `claude-opus-4.6-1m`). Select `Opus (1M)` via `/model` in Claude Code to activate it.
 
-To use it, select the 1M model variant in Claude Code via the `/model` command (e.g. `Opus (1M)`). Without this, Claude Code defaults to the standard 200K context window.
+### Thinking Mode
+
+`thinking.type: "enabled"` is automatically rewritten to `"adaptive"` for compatibility with Claude Code's extended thinking requests.
+
+---
 
 ## Usage with Codex
 
@@ -126,154 +253,35 @@ web_search = "disabled"
 
 [model_providers.copilot2api]
 name = "copilot2api"
-base_url = "http://127.0.0.1:7777/v1"
+base_url = "http://127.0.0.1:7777/api/your-account-id-here/v1"
 wire_api = "responses"
-api_key = "dummy"
+api_key = "your-api-token-here"
 ```
+
+---
 
 ## Usage with Gemini CLI
 
 Add to `~/.gemini/.env`:
 
 ```env
-GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:7777
-GEMINI_API_KEY=dummy
+GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:7777/api/your-account-id-here
+GEMINI_API_KEY=your-api-token-here
 GEMINI_MODEL=claude-opus-4.6-1m
 ```
 
-## Usage with AmpCode
+---
 
-Set the `AMP_URL` environment variable to point at copilot2api:
+## Docker Image
 
-```bash
-AMP_URL=http://127.0.0.1:7777/amp amp
-```
-
-Or add to `~/.config/amp/settings.json`:
-
-```json
-{
-  "amp.url": "http://127.0.0.1:7777/amp"
-}
-```
-
-Chat completions, tool calls, and image input all route through Copilot API. Login and management routes (threads, telemetry) are proxied to `ampcode.com` — a free amp account is required for authentication.
-
-<details>
-<summary>Usage with curl</summary>
-
-```bash
-# OpenAI chat completion
-curl http://localhost:7777/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-5.3-codex","messages":[{"role":"user","content":"Hello!"}]}'
-
-# Anthropic message
-curl http://localhost:7777/v1/messages \
-  -H "Content-Type: application/json" \
-  -H "x-api-key: dummy" \
-  -d '{"model":"claude-sonnet-4.6","messages":[{"role":"user","content":"Hello!"}],"max_tokens":100}'
-
-# List models
-curl http://localhost:7777/v1/models
-
-# Check usage/quota
-curl http://localhost:7777/usage
-```
-
-</details>
-
-<details>
-<summary>Usage with SDKs</summary>
-
-### OpenAI Python SDK
-
-```python
-import openai
-
-client = openai.OpenAI(
-    api_key="dummy",
-    base_url="http://127.0.0.1:7777/v1"
-)
-
-response = client.chat.completions.create(
-    model="gpt-5.3-codex",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-```
-
-### Anthropic Python SDK
-
-```python
-import anthropic
-
-client = anthropic.Anthropic(
-    api_key="dummy",
-    base_url="http://127.0.0.1:7777"
-)
-
-message = client.messages.create(
-    model="claude-sonnet-4.6",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-```
-
-</details>
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/v1/chat/completions` | POST | OpenAI Chat Completions (streaming & non-streaming) |
-| `/v1/responses` | POST | OpenAI Responses API |
-| `/v1/models` | GET | List available models (5min cache) |
-| `/v1/embeddings` | POST | Generate embeddings (string or array input) |
-| `/v1/messages` | POST | Anthropic Messages API (streaming & non-streaming) |
-| `/v1beta/models` | GET | List Gemini-compatible models |
-| `/v1beta/models/{model}:generateContent` | POST | Gemini Generate Content |
-| `/v1beta/models/{model}:streamGenerateContent` | POST | Gemini Generate Content streaming SSE |
-| `/v1beta/models/{model}:countTokens` | POST | Gemini token counting estimate |
-| `/amp/v1/chat/completions` | POST | AmpCode chat completions (via Copilot API) |
-| `/amp/v1/models` | GET | AmpCode model listing |
-| `/api/provider/*` | POST | AmpCode provider-specific routes |
-| `/api/*` | ANY | AmpCode management proxy to ampcode.com |
-| `/usage` | GET | Copilot usage and quota info |
-
-## Configuration
-
-### CLI Flags
+The image is built `FROM scratch` — a single static binary plus CA certificates. No shell, no OS packages, no CVEs from base layers.
 
 ```
-./copilot2api [options]
-
-  -host string       Server host (default "127.0.0.1")
-  -port int          Server port (default 7777)
-  -token-dir string  Token storage directory (default ~/.config/copilot2api)
-  -debug             Enable debug logging
-  -version           Show version and exit
+EXPOSE 7777  # Data Plane
+EXPOSE 7778  # Control Plane
 ```
 
-### Environment Variables
-
-Environment variables are used as defaults when flags are not provided:
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `COPILOT2API_HOST` | Server host | `127.0.0.1` |
-| `COPILOT2API_PORT` | Server port | `7777` |
-| `COPILOT2API_TOKEN_DIR` | Token storage directory | `~/.config/copilot2api` |
-| `COPILOT2API_DEBUG` | Enable debug logging (`true`/`false`, `1`/`0`) | `false` |
-
-CLI flags take precedence over environment variables.
-
-## How It Works
-
-1. Authenticates with GitHub via Device Flow OAuth
-2. Exchanges GitHub token for Copilot API token (auto-refreshes)
-3. Proxies OpenAI-format requests directly to Copilot API
-4. Routes Anthropic Messages requests by model capabilities (native `/v1/messages`, translated `/responses`, or translated `/chat/completions`)
-5. Automatically detects API endpoint from token (Individual/Business/Enterprise)
+---
 
 ## Development
 
@@ -282,37 +290,8 @@ go test ./...              # Run tests
 go build -o copilot2api .  # Build
 ```
 
+---
+
 ## License
 
 MIT
-
-## Multi-Account Support (Fork Feature)
-
-This fork adds support for multiple GitHub Copilot accounts with automatic round-robin load balancing.
-
-### Setup
-
-Create subdirectories in your token directory, one per account:
-
-```
-~/.config/copilot2api/
-├── account1/
-│   └── credentials.json  (auto-created after device flow)
-├── account2/
-│   └── credentials.json
-└── account3/
-    └── credentials.json
-```
-
-On first startup, the device flow will run sequentially for each account that lacks a valid `credentials.json`.
-
-### How It Works
-
-- Requests are distributed across accounts using **round-robin**
-- If one account's token is expired/invalid, the next account is tried automatically
-- Each account refreshes its Copilot token independently
-- The `/usage` endpoint returns info from all accounts
-
-### Backward Compatibility
-
-If the token directory contains no subdirectories (just `credentials.json` at the top level), it behaves exactly like the original single-account version.
