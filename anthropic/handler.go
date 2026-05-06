@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"slices"
 	"strings"
@@ -38,6 +39,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != "POST" {
 		WriteAnthropicError(w, http.StatusMethodNotAllowed, AnthropicErrorTypeInvalidRequest, "Method not allowed")
+		return
+	}
+
+	// Handle /v1/messages/count_tokens — estimate token count locally
+	if strings.HasSuffix(r.URL.Path, "/count_tokens") {
+		h.handleCountTokens(w, r)
 		return
 	}
 
@@ -794,6 +801,59 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// handleCountTokens estimates token count for a /v1/messages/count_tokens request.
+// Since Copilot backend doesn't support this endpoint, we estimate locally using
+// JSON byte length / 4 with adjustments for tools and model overhead.
+func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, upstream.MaxRequestBody)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid request body: %v", err))
+		return
+	}
+
+	// Parse just enough to understand the structure
+	var req struct {
+		Model    string            `json:"model"`
+		Messages []json.RawMessage `json:"messages"`
+		System   json.RawMessage   `json:"system"`
+		Tools    []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
+		return
+	}
+
+	// Estimate: JSON bytes / 4 ≈ tokens (rough approximation)
+	inputTokens := 0
+	for _, msg := range req.Messages {
+		inputTokens += len(msg)/4 + 3
+	}
+	if len(req.System) > 0 {
+		inputTokens += len(req.System) / 4
+	}
+	if len(req.Tools) > 0 {
+		for _, tool := range req.Tools {
+			inputTokens += len(tool) / 4
+		}
+		// Tool definition overhead for Claude models
+		if strings.HasPrefix(req.Model, "claude") {
+			inputTokens += 346
+		}
+	}
+
+	// Apply model-specific multiplier
+	if strings.HasPrefix(req.Model, "claude") {
+		inputTokens = int(math.Round(float64(inputTokens) * 1.15))
+	}
+	if inputTokens < 1 {
+		inputTokens = 1
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]int{"input_tokens": inputTokens})
 }
 
 // WriteAnthropicError writes an error response in Anthropic API format
