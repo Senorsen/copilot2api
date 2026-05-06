@@ -140,29 +140,21 @@ func main() {
 	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()
 
-	// All API routes require account_id: /v1/{account_id}/...
-	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
+	// All API routes require account_id: /api/{account_id}/v1/...
+	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		handleAccountRoute(w, r, accountManager, transport, modelsCache)
 	})
 
-	// Gemini routes also require account_id: /v1beta/{account_id}/models/...
+	// Old /v1/ path without account_id — return error
+	mux.HandleFunc("/v1/", func(w http.ResponseWriter, r *http.Request) {
+		proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /api/{account_id}/v1/...")
+		return
+	})
+
+	// Old /v1beta/ path without account_id — return error
 	mux.HandleFunc("/v1beta/", func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/v1beta/")
-		parts := strings.SplitN(path, "/", 2)
-		if len(parts) < 2 {
-			proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /v1beta/{account_id}/models/...")
-			return
-		}
-		accountID := parts[0]
-		client, ok := accountManager.GetClient(accountID)
-		if !ok {
-			proxy.WriteOpenAIError(w, http.StatusNotFound, proxy.OpenAIErrorTypeInvalidRequest, fmt.Sprintf("account %q not found", accountID))
-			return
-		}
-		r.URL.Path = "/v1beta/" + parts[1]
-		tp := auth.NewAccountTokenProvider(client)
-		handler := gemini.NewHandler(tp, transport, modelsCache)
-		handler.ServeHTTP(w, r)
+		proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /api/{account_id}/v1beta/...")
+		return
 	})
 
 	// Usage endpoint (aggregates all accounts)
@@ -231,19 +223,20 @@ func main() {
 	slog.Info("servers stopped")
 }
 
-// handleAccountRoute routes /v1/{account_id}/... — account_id is always required.
+// handleAccountRoute routes /api/{account_id}/... — account_id is always required.
+// The remainder after /api/{account_id}/ is forwarded as-is (e.g. /v1/chat/completions, /v1/messages, /v1beta/models/...).
 func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.AccountManager, transport *http.Transport, mc *models.Cache) {
-	path := strings.TrimPrefix(r.URL.Path, "/v1/")
+	path := strings.TrimPrefix(r.URL.Path, "/api/")
 
-	// Parse as /v1/{account_id}/...
+	// Parse as /api/{account_id}/...
 	parts := strings.SplitN(path, "/", 2)
 	if len(parts) < 2 || parts[1] == "" {
-		proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /v1/{account_id}/chat/completions")
+		proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "account_id required in path: /api/{account_id}/v1/...")
 		return
 	}
 
 	accountID := parts[0]
-	remainder := parts[1]
+	remainder := "/" + parts[1] // e.g. /v1/chat/completions
 
 	client, ok := am.GetClient(accountID)
 	if !ok {
@@ -251,8 +244,8 @@ func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.Account
 		return
 	}
 
-	// Rewrite path to /v1/{remainder}
-	r.URL.Path = "/v1/" + remainder
+	// Rewrite path to the remainder
+	r.URL.Path = remainder
 	tp := auth.NewAccountTokenProvider(client)
 	handleWithTokenProvider(w, r, tp, transport, mc)
 }
