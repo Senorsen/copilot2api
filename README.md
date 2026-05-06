@@ -173,13 +173,37 @@ Response:
 GET /accounts/{progress_id}/status
 ```
 
-Poll until `status` is `"done"`. On completion, returns the `account_id` (UUID) and `github_username`.
+Poll until status changes from `"pending"`. Possible statuses:
 
+| Status | Description |
+|--------|-------------|
+| `pending` | Waiting for user to complete device code flow |
+| `completed` | Login successful, returns `account_id` and `github_username` |
+| `expired` | Device code timed out, need to start a new login |
+| `error` | Login failed (e.g. username suffix mismatch), includes `error` message |
+
+**Success:**
 ```json
 {
-  "status": "done",
+  "status": "completed",
   "account_id": "550e8400-e29b-41d4-a716-446655440000",
   "github_username": "yourname"
+}
+```
+
+**Error (e.g. username suffix mismatch):**
+```json
+{
+  "status": "error",
+  "error": "username \"john\" does not end with required suffix \"_microsoft\"",
+  "github_username": "john"
+}
+```
+
+**Expired:**
+```json
+{
+  "status": "expired"
 }
 ```
 
