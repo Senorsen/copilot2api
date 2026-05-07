@@ -24,7 +24,7 @@ func (e *headersSentError) Error() string { return e.err.Error() }
 func (e *headersSentError) Unwrap() error { return e.err }
 
 // HandleStreamingRequest handles streaming requests to Copilot API
-func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request, endpoint string) error {
+func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request, endpoint string, usage *proxyTokenUsage) error {
 	var body interface{}
 	if r.Body != nil {
 		body = r.Body
@@ -57,7 +57,7 @@ func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Stream the response — headers are already sent at this point.
-	if err := h.streamResponse(w, resp.Body, endpoint); err != nil {
+	if err := h.streamResponse(w, resp.Body, endpoint, usage); err != nil {
 		return &headersSentError{err: err}
 	}
 	return nil
@@ -65,7 +65,7 @@ func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request,
 
 // streamResponse streams the SSE response line by line.
 // endpoint is used to select the correct termination strategy.
-func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endpoint string) error {
+func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endpoint string, usage *proxyTokenUsage) error {
 	scanner := bufio.NewScanner(body)
 
 	// Increase buffer size to handle large SSE lines (default is 64KB, increase to 1MB)
@@ -100,6 +100,22 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 				flusher.Flush()
 			}
 			break
+		}
+
+		// Parse usage from chat completion streaming chunks (usage-only chunk at end)
+		if !isResponses && usage != nil && strings.HasPrefix(line, "data: ") {
+			dataStr := strings.TrimPrefix(line, "data: ")
+			if dataStr != "[DONE]" {
+				var chunk types.OpenAIChatCompletionChunk
+				if err := json.Unmarshal([]byte(dataStr), &chunk); err == nil && chunk.Usage != nil {
+					usage.In = chunk.Usage.PromptTokens
+					usage.Out = chunk.Usage.CompletionTokens
+					usage.Total = chunk.Usage.TotalTokens
+					if chunk.Usage.PromptTokensDetails != nil {
+						usage.Cached = chunk.Usage.PromptTokensDetails.CachedTokens
+					}
+				}
+			}
 		}
 
 		// Responses API termination events
@@ -159,7 +175,7 @@ func isStreamingRequest(body []byte) bool {
 // converts each to Chat Completions chunks, and writes them to w.
 // Used when the client requested /chat/completions but the model only
 // supports /responses.
-func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser) error {
+func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser, usage *proxyTokenUsage) error {
 	scanner := bufio.NewScanner(body)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
@@ -203,6 +219,15 @@ func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser) erro
 
 			chunks := ConvertResponsesStreamEventToChatChunk(event, state)
 			for _, chunk := range chunks {
+				// Capture usage from chunk if present
+				if usage != nil && chunk.Usage != nil {
+					usage.In = chunk.Usage.PromptTokens
+					usage.Out = chunk.Usage.CompletionTokens
+					usage.Total = chunk.Usage.TotalTokens
+					if chunk.Usage.PromptTokensDetails != nil {
+						usage.Cached = chunk.Usage.PromptTokensDetails.CachedTokens
+					}
+				}
 				chunkData, err := json.Marshal(chunk)
 				if err != nil {
 					continue
@@ -254,7 +279,7 @@ func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser) erro
 // converts each to Responses API events, and writes them to w.
 // Used when the client requested /responses but the model only
 // supports /chat/completions.
-func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser) error {
+func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser, usage *proxyTokenUsage) error {
 	scanner := bufio.NewScanner(body)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
@@ -309,6 +334,16 @@ func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser
 		if err := json.Unmarshal([]byte(dataStr), &chunk); err != nil {
 			slog.Debug("skipping unparseable SSE data in conversion", "error", err)
 			continue
+		}
+
+		// Capture usage from chunk if present
+		if usage != nil && chunk.Usage != nil {
+			usage.In = chunk.Usage.PromptTokens
+			usage.Out = chunk.Usage.CompletionTokens
+			usage.Total = chunk.Usage.TotalTokens
+			if chunk.Usage.PromptTokensDetails != nil {
+				usage.Cached = chunk.Usage.PromptTokensDetails.CachedTokens
+			}
 		}
 
 		events := ConvertChatChunkToResponsesStreamEvents(chunk, state)

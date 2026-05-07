@@ -39,25 +39,57 @@ func NewHandler(tokenProvider upstream.TokenProvider, transport *http.Transport,
 	}
 }
 
+// proxyTokenUsage holds token statistics for a proxy request.
+type proxyTokenUsage struct {
+	In       int // prompt_tokens (includes cached)
+	Cached   int // prompt_tokens_details.cached_tokens
+	Out      int // completion_tokens
+	Total    int // total_tokens
+}
+
+// accountInfo returns account_id and username for this handler's token provider.
+func (h *Handler) accountInfo() (accountID, username string) {
+	if aip, ok := h.upstream.TokenProvider.(upstream.AccountInfoProvider); ok {
+		return aip.GetAccountInfo()
+	}
+	return "", ""
+}
+
 // ServeHTTP handles all proxy requests
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
 	// Extract endpoint from path
 	endpoint := strings.TrimPrefix(r.URL.Path, "/v1")
+	var usage proxyTokenUsage
+	accountID, username := h.accountInfo()
 	defer func() {
-		slog.Info("proxy request", "method", r.Method, "endpoint", endpoint, "duration_ms", time.Since(start).Milliseconds())
+		tokensInNocache := usage.In - usage.Cached
+		slog.Info("proxy request",
+			"method", r.Method,
+			"endpoint", endpoint,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"account_id", accountID,
+			"username", username,
+			"tokens_in_all", usage.In,
+			"tokens_in_nocache", tokensInNocache,
+			"tokens_cached", usage.Cached,
+			"tokens_new_cache", 0,
+			"tokens_out", usage.Out,
+			"tokens_total_all", usage.Total,
+			"tokens_total_nocache", tokensInNocache+usage.Out,
+		)
 	}()
 
 	switch endpoint {
 	case "/models":
 		h.handleModels(w, r)
 	case "/embeddings":
-		h.handleEmbeddings(w, r)
+		h.handleEmbeddings(w, r, &usage)
 	case "/chat/completions":
-		h.handlePassthrough(w, r, endpoint)
+		h.handlePassthrough(w, r, endpoint, &usage)
 	case "/responses":
-		h.handlePassthrough(w, r, endpoint)
+		h.handlePassthrough(w, r, endpoint, &usage)
 	default:
 		WriteOpenAIError(w, http.StatusNotFound, OpenAIErrorTypeInvalidRequest, "Endpoint not found")
 	}
@@ -87,7 +119,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePassthrough handles direct passthrough requests
-func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endpoint string) {
+func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endpoint string, usage *proxyTokenUsage) {
 	// Check body size before processing — reject oversized payloads with 413
 	var bodyBytes []byte
 	if r.Body != nil {
@@ -104,12 +136,12 @@ func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endp
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
 
-	h.handlePassthroughBody(w, r, endpoint, bodyBytes)
+	h.handlePassthroughBody(w, r, endpoint, bodyBytes, usage)
 }
 
 // handlePassthroughBody processes the passthrough request after the body has been read and validated.
 // It takes pre-read body bytes to avoid redundant body reading.
-func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, endpoint string, bodyBytes []byte) {
+func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, endpoint string, bodyBytes []byte, usage *proxyTokenUsage) {
 	// Determine smart routing: should we convert to a different endpoint?
 	targetEndpoint := h.resolveTargetEndpoint(r, endpoint, bodyBytes)
 
@@ -122,7 +154,7 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 	// If no conversion needed, passthrough as before
 	if targetEndpoint == endpoint {
 		if streaming {
-			if err := h.HandleStreamingRequest(w, r, endpoint); err != nil {
+			if err := h.HandleStreamingRequest(w, r, endpoint, usage); err != nil {
 				upstream.LogRequestError("streaming request failed", err, "endpoint", endpoint)
 				var hse *headersSentError
 				if !errors.As(err, &hse) {
@@ -144,6 +176,9 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 
+		// Extract usage from non-streaming response
+		extractUsageFromChatResponse(respData, usage)
+
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(respData)
 		return
@@ -153,15 +188,15 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 	switch {
 	case endpoint == "/chat/completions" && targetEndpoint == "/responses":
 		if streaming {
-			h.handleChatToResponsesStreaming(w, r, bodyBytes)
+			h.handleChatToResponsesStreaming(w, r, bodyBytes, usage)
 		} else {
-			h.handleChatToResponsesNonStreaming(w, r, bodyBytes)
+			h.handleChatToResponsesNonStreaming(w, r, bodyBytes, usage)
 		}
 	case endpoint == "/responses" && targetEndpoint == "/chat/completions":
 		if streaming {
-			h.handleResponsesToChatStreaming(w, r, bodyBytes)
+			h.handleResponsesToChatStreaming(w, r, bodyBytes, usage)
 		} else {
-			h.handleResponsesToChatNonStreaming(w, r, bodyBytes)
+			h.handleResponsesToChatNonStreaming(w, r, bodyBytes, usage)
 		}
 	}
 }
@@ -221,11 +256,28 @@ func extractModelField(body []byte) string {
 	return top.Model
 }
 
+// extractUsageFromChatResponse parses usage fields from an OpenAI Chat Completions JSON response.
+func extractUsageFromChatResponse(data []byte, usage *proxyTokenUsage) {
+	if usage == nil {
+		return
+	}
+	var resp types.OpenAIChatCompletionsResponse
+	if err := json.Unmarshal(data, &resp); err != nil || resp.Usage == nil {
+		return
+	}
+	usage.In = resp.Usage.PromptTokens
+	usage.Out = resp.Usage.CompletionTokens
+	usage.Total = resp.Usage.TotalTokens
+	if resp.Usage.PromptTokensDetails != nil {
+		usage.Cached = resp.Usage.PromptTokensDetails.CachedTokens
+	}
+}
+
 // --- Non-streaming conversion handlers ---
 
 // handleChatToResponsesNonStreaming converts a Chat Completions request to
 // Responses API, sends it upstream, and converts the response back.
-func (h *Handler) handleChatToResponsesNonStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+func (h *Handler) handleChatToResponsesNonStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte, usage *proxyTokenUsage) {
 	var chatReq types.OpenAIChatCompletionsRequest
 	if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
 		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
@@ -275,6 +327,15 @@ func (h *Handler) handleChatToResponsesNonStreaming(w http.ResponseWriter, r *ht
 	}
 
 	chatResp := ConvertResponsesResultToChatResponse(responsesResult, chatReq.Model)
+	// Extract usage from converted chat response
+	if chatResp.Usage != nil && usage != nil {
+		usage.In = chatResp.Usage.PromptTokens
+		usage.Out = chatResp.Usage.CompletionTokens
+		usage.Total = chatResp.Usage.TotalTokens
+		if chatResp.Usage.PromptTokensDetails != nil {
+			usage.Cached = chatResp.Usage.PromptTokensDetails.CachedTokens
+		}
+	}
 	result, err := json.Marshal(chatResp)
 	if err != nil {
 		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal response")
@@ -287,7 +348,7 @@ func (h *Handler) handleChatToResponsesNonStreaming(w http.ResponseWriter, r *ht
 
 // handleResponsesToChatNonStreaming converts a Responses API request to
 // Chat Completions, sends it upstream, and converts the response back.
-func (h *Handler) handleResponsesToChatNonStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+func (h *Handler) handleResponsesToChatNonStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte, usage *proxyTokenUsage) {
 	var responsesReq types.ResponsesRequest
 	if err := json.Unmarshal(bodyBytes, &responsesReq); err != nil {
 		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
@@ -327,6 +388,15 @@ func (h *Handler) handleResponsesToChatNonStreaming(w http.ResponseWriter, r *ht
 	}
 
 	responsesResult := ConvertChatResponseToResponsesResult(chatResp)
+	// Extract usage from chat response
+	if chatResp.Usage != nil && usage != nil {
+		usage.In = chatResp.Usage.PromptTokens
+		usage.Out = chatResp.Usage.CompletionTokens
+		usage.Total = chatResp.Usage.TotalTokens
+		if chatResp.Usage.PromptTokensDetails != nil {
+			usage.Cached = chatResp.Usage.PromptTokensDetails.CachedTokens
+		}
+	}
 	result, err := json.Marshal(responsesResult)
 	if err != nil {
 		WriteOpenAIError(w, http.StatusInternalServerError, OpenAIErrorTypeServerError, "Failed to marshal response")
@@ -389,7 +459,7 @@ func (h *Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEmbeddings normalizes input to array format before proxying
-func (h *Handler) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleEmbeddings(w http.ResponseWriter, r *http.Request, usage *proxyTokenUsage) {
 	r.Body = http.MaxBytesReader(w, r.Body, upstream.MaxRequestBody) // 10MB limit
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -415,14 +485,14 @@ func (h *Handler) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
-	h.handlePassthroughBody(w, r, "/embeddings", body)
+	h.handlePassthroughBody(w, r, "/embeddings", body, usage)
 }
 
 // --- Streaming conversion handlers ---
 
 // handleChatToResponsesStreaming sends a converted Chat→Responses request upstream
 // and converts the Responses stream events back to Chat Completions chunks.
-func (h *Handler) handleChatToResponsesStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+func (h *Handler) handleChatToResponsesStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte, usage *proxyTokenUsage) {
 	var chatReq types.OpenAIChatCompletionsRequest
 	if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
 		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
@@ -461,7 +531,7 @@ func (h *Handler) handleChatToResponsesStreaming(w http.ResponseWriter, r *http.
 		flusher.Flush()
 	}
 
-	if err := streamResponsesAsChatChunks(w, resp.Body); err != nil {
+	if err := streamResponsesAsChatChunks(w, resp.Body, usage); err != nil {
 		slog.Error("streaming conversion failed (responses→chat)", "error", err)
 		// Headers already sent, can't write HTTP error
 	}
@@ -469,7 +539,7 @@ func (h *Handler) handleChatToResponsesStreaming(w http.ResponseWriter, r *http.
 
 // handleResponsesToChatStreaming sends a converted Responses→Chat request upstream
 // and converts the Chat Completions stream chunks back to Responses API events.
-func (h *Handler) handleResponsesToChatStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
+func (h *Handler) handleResponsesToChatStreaming(w http.ResponseWriter, r *http.Request, bodyBytes []byte, usage *proxyTokenUsage) {
 	var responsesReq types.ResponsesRequest
 	if err := json.Unmarshal(bodyBytes, &responsesReq); err != nil {
 		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Invalid JSON in request body")
@@ -508,7 +578,7 @@ func (h *Handler) handleResponsesToChatStreaming(w http.ResponseWriter, r *http.
 		flusher.Flush()
 	}
 
-	if err := streamChatChunksAsResponsesEvents(w, resp.Body); err != nil {
+	if err := streamChatChunksAsResponsesEvents(w, resp.Body, usage); err != nil {
 		slog.Error("streaming conversion failed (chat→responses)", "error", err)
 		// Headers already sent, can't write HTTP error
 	}
