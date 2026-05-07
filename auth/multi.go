@@ -39,6 +39,12 @@ func NewAccountManager(baseDir string) (*AccountManager, error) {
 		}
 		id := entry.Name()
 		dir := filepath.Join(baseDir, id)
+		// Skip directories that don't contain credentials.json (e.g. lost+found)
+		credPath := filepath.Join(dir, "credentials.json")
+		if _, err := os.Stat(credPath); os.IsNotExist(err) {
+			slog.Debug("skipping directory without credentials.json", "id", id)
+			continue
+		}
 		client, err := NewClient(dir)
 		if err != nil {
 			slog.Warn("skipping account directory", "id", id, "error", err)
