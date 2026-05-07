@@ -22,6 +22,12 @@ type TokenProvider interface {
 	GetBaseURL() string
 }
 
+// AccountInfoProvider is an optional interface that TokenProvider implementations
+// may satisfy to expose the account ID and GitHub username for logging.
+type AccountInfoProvider interface {
+	GetAccountInfo() (accountID, username string)
+}
+
 // Client makes requests to the upstream Copilot API.
 type Client struct {
 	TokenProvider TokenProvider

@@ -116,7 +116,7 @@ func (am *AccountManager) EnsureAllAuthenticated(ctx context.Context) error {
 	am.mu.RLock()
 	defer am.mu.RUnlock()
 	for id, client := range am.accounts {
-		slog.Info("authenticating account", "id", id)
+		slog.Info("authenticating account", "id", id, "username", client.creds.GitHubUsername)
 		if err := client.EnsureAuthenticated(ctx); err != nil {
 			return fmt.Errorf("account %s authentication failed: %w", id, err)
 		}
@@ -140,11 +140,16 @@ func (am *AccountManager) BaseDir() string {
 
 // AccountTokenProvider wraps a single Client as an upstream.TokenProvider.
 type AccountTokenProvider struct {
-	client *Client
+	client         *Client
+	AccountID      string
+	GitHubUsername string
 }
 
 func NewAccountTokenProvider(client *Client) *AccountTokenProvider {
-	return &AccountTokenProvider{client: client}
+	return &AccountTokenProvider{
+		client:         client,
+		GitHubUsername: client.creds.GitHubUsername,
+	}
 }
 
 func (p *AccountTokenProvider) GetToken(ctx context.Context) (string, error) {
@@ -153,4 +158,9 @@ func (p *AccountTokenProvider) GetToken(ctx context.Context) (string, error) {
 
 func (p *AccountTokenProvider) GetBaseURL() string {
 	return p.client.GetBaseURL()
+}
+
+// GetAccountInfo implements upstream.AccountInfoProvider.
+func (p *AccountTokenProvider) GetAccountInfo() (accountID, username string) {
+	return p.AccountID, p.GitHubUsername
 }

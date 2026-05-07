@@ -75,7 +75,7 @@ func (c *Client) GetValidToken(ctx context.Context) (*CopilotToken, error) {
 			c.mu.RUnlock()
 			return token, nil
 		} else {
-			slog.Error("failed to refresh copilot token with stored GitHub token", "error", err)
+			slog.Error("failed to refresh copilot token with stored GitHub token", "error", err, "username", c.creds.GitHubUsername)
 		}
 	}
 
@@ -171,7 +171,10 @@ func (c *Client) performDeviceFlow() error {
 
 func (c *Client) refreshCopilotToken() error {
 	start := time.Now()
-	slog.Info("refreshing Copilot token")
+	c.mu.RLock()
+	username := c.creds.GitHubUsername
+	c.mu.RUnlock()
+	slog.Info("refreshing Copilot token", "username", username)
 
 	c.mu.RLock()
 	githubToken := c.creds.GitHubToken
@@ -189,10 +192,10 @@ func (c *Client) refreshCopilotToken() error {
 
 	// Save credentials to disk
 	if err := c.storage.SaveCredentials(&credsCopy); err != nil {
-		slog.Warn("failed to save credentials", "error", err)
+		slog.Warn("failed to save credentials", "error", err, "username", username)
 	}
 
-	slog.Info("copilot token refreshed", "expires_at", copilotToken.ExpiresAt, "base_url", copilotToken.BaseURL, "duration_ms", time.Since(start).Milliseconds())
+	slog.Info("copilot token refreshed", "expires_at", copilotToken.ExpiresAt, "base_url", copilotToken.BaseURL, "duration_ms", time.Since(start).Milliseconds(), "username", username)
 	return nil
 }
 // UsageInfo contains Copilot usage and quota information

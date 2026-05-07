@@ -241,6 +241,7 @@ func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.Account
 	// Rewrite path to the remainder
 	r.URL.Path = remainder
 	tp := auth.NewAccountTokenProvider(client)
+	tp.AccountID = accountID
 	handleWithTokenProvider(w, r, tp, transport, mc)
 }
 
