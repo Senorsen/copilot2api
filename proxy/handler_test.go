@@ -230,7 +230,7 @@ func TestHandler_HandlePassthrough(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	handler.handlePassthrough(rec, req, "/chat/completions")
+	handler.handlePassthrough(rec, req, "/chat/completions", nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d; body: %s", rec.Code, rec.Body.String())
@@ -353,7 +353,7 @@ func TestHandlePassthrough_StreamingNetworkFailure_Returns502(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	handler.handlePassthrough(rec, req, "/chat/completions")
+	handler.handlePassthrough(rec, req, "/chat/completions", nil)
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected status 502, got %d; body: %s", rec.Code, rec.Body.String())

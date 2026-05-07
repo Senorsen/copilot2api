@@ -95,7 +95,7 @@ func streamResponseHelper(t *testing.T, ssePayload string, endpoint string) stri
 	h := &Handler{}
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(ssePayload))
-	if err := h.streamResponse(rec, body, endpoint); err != nil {
+	if err := h.streamResponse(rec, body, endpoint, nil); err != nil {
 		t.Fatalf("streamResponse returned error: %v", err)
 	}
 	return rec.Body.String()
@@ -200,7 +200,7 @@ func TestStreamResponsesAsChatChunks_NoTerminalEvent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseData))
 
-	err := streamResponsesAsChatChunks(rec, body)
+	err := streamResponsesAsChatChunks(rec, body, nil)
 	if err == nil {
 		t.Fatal("expected error when stream ends without terminal event")
 	}
@@ -219,7 +219,7 @@ func TestStreamResponsesAsChatChunks_WithTerminalEvent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseData))
 
-	err := streamResponsesAsChatChunks(rec, body)
+	err := streamResponsesAsChatChunks(rec, body, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestStreamChatChunksAsResponsesEvents_NoTerminalEvent(t *testing.T) {
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseData))
 
-	err := streamChatChunksAsResponsesEvents(rec, body)
+	err := streamChatChunksAsResponsesEvents(rec, body, nil)
 	if err == nil {
 		t.Fatal("expected error when chat stream ends without [DONE]")
 	}

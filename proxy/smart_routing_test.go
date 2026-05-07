@@ -249,7 +249,7 @@ func TestSmartRouting_ChatToResponsesNonStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/chat/completions")
+	h.handlePassthrough(rec, req, "/chat/completions", nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
@@ -328,7 +328,7 @@ func TestSmartRouting_ResponsesToChatNonStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/responses")
+	h.handlePassthrough(rec, req, "/responses", nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
@@ -373,7 +373,7 @@ func TestSmartRouting_PassthroughWhenModelSupportsEndpoint(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/chat/completions")
+	h.handlePassthrough(rec, req, "/chat/completions", nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -429,7 +429,7 @@ func TestSmartRouting_ChatToResponsesStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/chat/completions")
+	h.handlePassthrough(rec, req, "/chat/completions", nil)
 
 	result := rec.Body.String()
 	// Should contain Chat Completions format chunks
@@ -479,7 +479,7 @@ func TestSmartRouting_ResponsesToChatStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/responses")
+	h.handlePassthrough(rec, req, "/responses", nil)
 
 	result := rec.Body.String()
 	// Should contain Responses API format events
@@ -508,7 +508,7 @@ func TestStreamResponsesAsChatChunks_Basic(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamResponsesAsChatChunks(rec, body)
+	err := streamResponsesAsChatChunks(rec, body, nil)
 	if err != nil {
 		t.Fatalf("streamResponsesAsChatChunks error: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestStreamResponsesAsChatChunks_IgnoresDataDone(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamResponsesAsChatChunks(rec, body)
+	err := streamResponsesAsChatChunks(rec, body, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestStreamResponsesAsChatChunks_EventTypeFromSSELine(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamResponsesAsChatChunks(rec, body)
+	err := streamResponsesAsChatChunks(rec, body, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestStreamChatChunksAsResponsesEvents_Basic(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body)
+	err := streamChatChunksAsResponsesEvents(rec, body, nil)
 	if err != nil {
 		t.Fatalf("streamChatChunksAsResponsesEvents error: %v", err)
 	}
@@ -617,7 +617,7 @@ func TestStreamChatChunksAsResponsesEvents_DeferredTermination(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body)
+	err := streamChatChunksAsResponsesEvents(rec, body, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestStreamChatChunksAsResponsesEvents_DoneWithoutUsage(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body)
+	err := streamChatChunksAsResponsesEvents(rec, body, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -665,7 +665,7 @@ func TestStreamChatChunksAsResponsesEvents_DoneWithoutFinishReason(t *testing.T)
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body)
+	err := streamChatChunksAsResponsesEvents(rec, body, nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
