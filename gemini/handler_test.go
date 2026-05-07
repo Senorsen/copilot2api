@@ -45,7 +45,7 @@ func TestHandler_ModelsListsGeminiMethods(t *testing.T) {
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
 	uc := upstream.NewClient(tp, nil)
-	h := &Handler{upstream: uc, models: models.NewCache(uc, 5*time.Minute)}
+	h := &Handler{upstream: uc, models: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute)}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
 	rec := httptest.NewRecorder()
@@ -117,7 +117,7 @@ func TestHandler_GenerateContent_NonStreaming(t *testing.T) {
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
 	uc := upstream.NewClient(tp, nil)
-	h := &Handler{upstream: uc, models: models.NewCache(uc, 5*time.Minute)}
+	h := &Handler{upstream: uc, models: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute)}
 
 	body := "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}"
 	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gpt-5.4:generateContent", strings.NewReader(body))
@@ -163,7 +163,7 @@ func TestHandler_StreamGenerateContent_SSE(t *testing.T) {
 
 	tp := &stubTokenProvider{baseURL: fakeUpstream.URL}
 	uc := upstream.NewClient(tp, nil)
-	h := &Handler{upstream: uc, models: models.NewCache(uc, 5*time.Minute)}
+	h := &Handler{upstream: uc, models: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute)}
 
 	body := "{\"contents\":[{\"role\":\"user\",\"parts\":[{\"text\":\"hello\"}]}]}"
 	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gpt-4o:streamGenerateContent?alt=sse", strings.NewReader(body))

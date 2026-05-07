@@ -40,14 +40,20 @@ type Cache struct {
 	cachedAt time.Time
 	ttl      time.Duration
 	sf       singleflight.Group
-	upstream *upstream.Client
+	// upstreamProvider returns the client to use for the next /models fetch,
+	// or nil if no client is currently available. It is invoked on every
+	// cache-miss fetch so the cache can pick up accounts that were added
+	// after process start.
+	upstreamProvider func() *upstream.Client
 }
 
-// NewCache creates a shared models cache.
-func NewCache(upstreamClient *upstream.Client, ttl time.Duration) *Cache {
+// NewCache creates a shared models cache. upstreamProvider is called on every
+// fetch to obtain a client; returning nil signals "no account available yet"
+// and the fetch reports an error rather than caching emptiness.
+func NewCache(upstreamProvider func() *upstream.Client, ttl time.Duration) *Cache {
 	return &Cache{
-		upstream: upstreamClient,
-		ttl:      ttl,
+		upstreamProvider: upstreamProvider,
+		ttl:              ttl,
 	}
 }
 
@@ -116,10 +122,14 @@ func (c *Cache) get(ctx context.Context) ([]byte, map[string]*Info, error) {
 }
 
 func (c *Cache) fetch(ctx context.Context) (cacheData, error) {
-	if c.upstream == nil {
-		return cacheData{}, fmt.Errorf("no upstream client configured for models cache")
+	if c.upstreamProvider == nil {
+		return cacheData{}, fmt.Errorf("no upstream provider configured for models cache")
 	}
-	_, respData, err := c.upstream.Do(ctx, upstream.Request{
+	upstreamClient := c.upstreamProvider()
+	if upstreamClient == nil {
+		return cacheData{}, fmt.Errorf("no upstream client available for models cache (no accounts configured yet?)")
+	}
+	_, respData, err := upstreamClient.Do(ctx, upstream.Request{
 		Method:   "GET",
 		Endpoint: "/models",
 	})

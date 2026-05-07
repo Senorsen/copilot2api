@@ -66,7 +66,7 @@ func TestResolveTargetEndpoint_NoModelField(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
@@ -90,7 +90,7 @@ func TestResolveTargetEndpoint_UnknownModel(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
@@ -114,7 +114,7 @@ func TestResolveTargetEndpoint_ModelSupportsBoth(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	// Request /chat/completions → model supports it → no conversion
@@ -147,7 +147,7 @@ func TestResolveTargetEndpoint_NeedsConversion(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	// o3-mini only supports /responses → /chat/completions request → convert to /responses
@@ -179,7 +179,7 @@ func TestResolveTargetEndpoint_ModelSupportsNeither(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
@@ -240,7 +240,7 @@ func TestSmartRouting_ChatToResponsesNonStreaming(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	// Send a Chat Completions request for a model that only supports /responses
@@ -319,7 +319,7 @@ func TestSmartRouting_ResponsesToChatNonStreaming(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	// Send a Responses API request for a model that only supports /chat/completions
@@ -365,7 +365,7 @@ func TestSmartRouting_PassthroughWhenModelSupportsEndpoint(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	body := `{"model":"gpt-4","messages":[],"stream":false}`
@@ -421,7 +421,7 @@ func TestSmartRouting_ChatToResponsesStreaming(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	body := `{"model":"resp-only","messages":[{"role":"user","content":"hi"}],"stream":true}`
@@ -471,7 +471,7 @@ func TestSmartRouting_ResponsesToChatStreaming(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	h := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	body := `{"model":"chat-only","input":[{"type":"message","role":"user","content":"hi"}],"stream":true}`

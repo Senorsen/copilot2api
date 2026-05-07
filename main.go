@@ -123,19 +123,20 @@ func main() {
 	// Shared HTTP transport
 	transport := upstream.NewTransport()
 
-	// Models cache — use first available account for fetching models list
-	var modelsCache *models.Cache
-	accounts := accountManager.ListAccounts()
-	if len(accounts) > 0 {
-		if client, ok := accountManager.GetClient(accounts[0].ID); ok {
-			tp := auth.NewAccountTokenProvider(client)
-			upstreamClient := upstream.NewClient(tp, transport)
-			modelsCache = models.NewCache(upstreamClient, 5*time.Minute)
+	// Models cache — pulls a current account's upstream client on every fetch
+	// so accounts added via the control plane after startup also work.
+	modelsCache := models.NewCache(func() *upstream.Client {
+		accs := accountManager.ListAccounts()
+		if len(accs) == 0 {
+			return nil
 		}
-	}
-	if modelsCache == nil {
-		modelsCache = models.NewCache(nil, 5*time.Minute)
-	}
+		client, ok := accountManager.GetClient(accs[0].ID)
+		if !ok {
+			return nil
+		}
+		tp := auth.NewAccountTokenProvider(client)
+		return upstream.NewClient(tp, transport)
+	}, 5*time.Minute)
 
 	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()

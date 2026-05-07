@@ -143,7 +143,7 @@ func TestHandler_ServeHTTP_Routing(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	handler := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 	req := httptest.NewRequest("GET", "/v1/models", nil)
 	rec := httptest.NewRecorder()
@@ -180,7 +180,7 @@ func TestHandler_HandleModels(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	handler := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	req := httptest.NewRequest("GET", "/v1/models", nil)
@@ -222,7 +222,7 @@ func TestHandler_HandlePassthrough(t *testing.T) {
 	uc := upstream.NewClient(tp, nil)
 	handler := &Handler{
 		upstream:    uc,
-		modelsCache: models.NewCache(uc, 5*time.Minute),
+		modelsCache: models.NewCache(func() *upstream.Client { return uc }, 5*time.Minute),
 	}
 
 	body := `{"model":"gpt-4","messages":[],"stream":false}`
