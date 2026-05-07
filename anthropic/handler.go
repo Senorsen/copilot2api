@@ -24,6 +24,23 @@ type Handler struct {
 	models   *models.Cache
 }
 
+// tokenUsage holds token statistics collected during a request.
+type tokenUsage struct {
+	In       int // input_tokens (raw, excludes cache)
+	Cached   int // cache_read_input_tokens
+	NewCache int // cache_creation_input_tokens
+	Out      int // output_tokens
+}
+
+// accountInfo returns account_id and username log attrs for this handler's
+// token provider, or empty strings if unavailable.
+func (h *Handler) accountInfo() (accountID, username string) {
+	if aip, ok := h.upstream.TokenProvider.(upstream.AccountInfoProvider); ok {
+		return aip.GetAccountInfo()
+	}
+	return "", ""
+}
+
 // NewHandler creates a new Anthropic handler.
 // The transport is used for upstream HTTP requests (pass nil to create a new one).
 func NewHandler(authClient upstream.TokenProvider, transport *http.Transport, mc *models.Cache) *Handler {
@@ -88,8 +105,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	route := "chat_completions" // default fallback
+	var usage tokenUsage
+	accountID, username := h.accountInfo()
 	defer func() {
-		slog.Info("anthropic request", "endpoint", "/v1/messages", "model", anthropicReq.Model, "stream", anthropicReq.Stream, "messages", len(anthropicReq.Messages), "route", route, "duration_ms", time.Since(start).Milliseconds())
+		slog.Info("anthropic request",
+			"endpoint", "/v1/messages",
+			"model", anthropicReq.Model,
+			"stream", anthropicReq.Stream,
+			"messages", len(anthropicReq.Messages),
+			"route", route,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"account_id", accountID,
+			"username", username,
+			"tokens_in_all", usage.In+usage.Cached+usage.NewCache,
+			"tokens_in_nocache", usage.In,
+			"tokens_cached", usage.Cached,
+			"tokens_new_cache", usage.NewCache,
+			"tokens_out", usage.Out,
+			"tokens_total_all", usage.In+usage.Cached+usage.NewCache+usage.Out,
+			"tokens_total_nocache", usage.In+usage.Out,
+		)
 	}()
 
 	modelInfo, capabilityFetchFailed := h.getModelInfo(r.Context(), anthropicReq.Model)
@@ -102,7 +137,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Only re-encode the body for native passthrough (the only path that
 		// sends raw reqBody). Responses and Chat Completions paths use the
 		// parsed struct, so they skip this JSON round-trip.
-		if modelChanged || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement {
+		if modelChanged || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement || topLevelInfo.HasEnabledThinking {
 			newBody, err := normalizeNativeMessagesBody(reqBody, resolvedModel, modelChanged)
 			if err != nil {
 				WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
@@ -114,16 +149,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if topLevelInfo.HasContextManagement {
 				slog.Debug("normalized native /messages request", "removed_top_level_field", "context_management")
 			}
+			if topLevelInfo.HasEnabledThinking {
+				slog.Debug("normalized native /messages request", "rewritten_thinking_type", "enabled -> adaptive")
+			}
 			reqBody = newBody
 		}
-		h.handleNativeMessagesPassthrough(w, r, reqBody, anthropicReq.Stream)
+		h.handleNativeMessagesPassthrough(w, r, reqBody, anthropicReq.Stream, &usage)
 		return
 	}
 
 	// Route based on model capabilities
 	if modelSupportsEndpoint(modelInfo, "/responses") {
 		route = "responses"
-		h.handleViaResponsesAPI(w, r, anthropicReq)
+		h.handleViaResponsesAPI(w, r, anthropicReq, &usage)
 		return
 	}
 
@@ -131,7 +169,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("failed to fetch model capabilities, falling back to Chat Completions", "model", anthropicReq.Model)
 	}
 
-	h.handleViaChatCompletions(w, r, anthropicReq)
+	h.handleViaChatCompletions(w, r, anthropicReq, &usage)
 }
 
 func (h *Handler) validateRequest(req AnthropicMessagesRequest) error {
@@ -150,7 +188,7 @@ func (h *Handler) validateRequest(req AnthropicMessagesRequest) error {
 	return nil
 }
 
-func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http.Request, body []byte, stream bool) {
+func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http.Request, body []byte, stream bool, usage *tokenUsage) {
 	if stream {
 		resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: body, Stream: true, QueryString: r.URL.RawQuery})
 		if err != nil {
@@ -186,6 +224,8 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 					}
 					continue
 				}
+				// Try to extract usage from message_delta / message_stop events
+				extractNativeStreamUsage(line, usage)
 				if _, writeErr := w.Write(line); writeErr != nil {
 					slog.Error("failed to write native /messages stream", "error", writeErr)
 					return
@@ -221,13 +261,16 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 		return
 	}
 
+	// Extract usage from non-streaming native response
+	extractNativeResponseUsage(respData, usage)
+
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(respData)
 }
 
 // --- Chat Completions path (existing fallback) ---
 
-func (h *Handler) handleViaChatCompletions(w http.ResponseWriter, r *http.Request, anthropicReq AnthropicMessagesRequest) {
+func (h *Handler) handleViaChatCompletions(w http.ResponseWriter, r *http.Request, anthropicReq AnthropicMessagesRequest, usage *tokenUsage) {
 	openAIReq, err := ConvertAnthropicToOpenAI(anthropicReq)
 	if err != nil {
 		slog.Error("failed to convert Anthropic request to OpenAI", "error", err)
@@ -236,13 +279,13 @@ func (h *Handler) handleViaChatCompletions(w http.ResponseWriter, r *http.Reques
 	}
 
 	if anthropicReq.Stream {
-		h.handleStreamingRequest(w, r, openAIReq)
+		h.handleStreamingRequest(w, r, openAIReq, usage)
 	} else {
-		h.handleNonStreamingRequest(w, r, openAIReq)
+		h.handleNonStreamingRequest(w, r, openAIReq, usage)
 	}
 }
 
-func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest) {
+func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest, usage *tokenUsage) {
 	openAIReq.Stream = false
 	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq})
 	if err != nil {
@@ -272,11 +315,16 @@ func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	usage.In = anthropicResp.Usage.InputTokens
+	usage.Cached = anthropicResp.Usage.CacheReadInputTokens
+	usage.NewCache = anthropicResp.Usage.CacheCreationInputTokens
+	usage.Out = anthropicResp.Usage.OutputTokens
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(anthropicResp)
 }
 
-func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest) {
+func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest, usage *tokenUsage) {
 	openAIReq.Stream = true
 	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, Stream: true})
 	if err != nil {
@@ -305,6 +353,19 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 			return nil, false, err
 		}
 
+		// Capture usage from the final chunk (stream usage event)
+		if chunk.Usage != nil {
+			usage.In = chunk.Usage.PromptTokens
+			usage.Out = chunk.Usage.CompletionTokens
+			if chunk.Usage.PromptTokensDetails != nil {
+				usage.Cached = chunk.Usage.PromptTokensDetails.CachedTokens
+				usage.In -= usage.Cached
+				if usage.In < 0 {
+					usage.In = 0
+				}
+			}
+		}
+
 		return events, state.Finished, nil
 	})
 
@@ -315,7 +376,7 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 
 // --- Responses API path ---
 
-func (h *Handler) handleViaResponsesAPI(w http.ResponseWriter, r *http.Request, anthropicReq AnthropicMessagesRequest) {
+func (h *Handler) handleViaResponsesAPI(w http.ResponseWriter, r *http.Request, anthropicReq AnthropicMessagesRequest, usage *tokenUsage) {
 	responsesReq, err := ConvertAnthropicToResponses(anthropicReq)
 	if err != nil {
 		slog.Error("failed to convert Anthropic request to Responses", "error", err)
@@ -326,13 +387,13 @@ func (h *Handler) handleViaResponsesAPI(w http.ResponseWriter, r *http.Request, 
 	slog.Debug("responses request", "model", responsesReq.Model, "input_items", len(responsesReq.Input), "stream", responsesReq.Stream)
 
 	if anthropicReq.Stream {
-		h.handleResponsesStreaming(w, r, responsesReq)
+		h.handleResponsesStreaming(w, r, responsesReq, usage)
 	} else {
-		h.handleResponsesNonStreaming(w, r, responsesReq)
+		h.handleResponsesNonStreaming(w, r, responsesReq, usage)
 	}
 }
 
-func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest) {
+func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest, usage *tokenUsage) {
 	responsesReq.Stream = false
 	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq})
 	if err != nil {
@@ -359,11 +420,16 @@ func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Req
 	anthropicResp := ConvertResponsesToAnthropic(result)
 	slog.Debug("translated anthropic response", "id", anthropicResp.ID, "stop_reason", anthropicResp.StopReason, "content_blocks", len(anthropicResp.Content))
 
+	usage.In = anthropicResp.Usage.InputTokens
+	usage.Cached = anthropicResp.Usage.CacheReadInputTokens
+	usage.NewCache = anthropicResp.Usage.CacheCreationInputTokens
+	usage.Out = anthropicResp.Usage.OutputTokens
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(anthropicResp)
 }
 
-func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest) {
+func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest, usage *tokenUsage) {
 	responsesReq.Stream = true
 	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, Stream: true})
 	if err != nil {
@@ -389,6 +455,20 @@ func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Reques
 		}
 		if streamEvent.Type == "" && event.Event != "" {
 			streamEvent.Type = event.Event
+		}
+
+		// Capture usage from response.completed / response.incomplete event
+		if (streamEvent.Type == "response.completed" || streamEvent.Type == "response.incomplete") && streamEvent.Response != nil && streamEvent.Response.Usage != nil {
+			u := streamEvent.Response.Usage
+			usage.In = u.InputTokens
+			usage.Out = u.OutputTokens
+			if u.InputTokensDetails != nil {
+				usage.Cached = u.InputTokensDetails.CachedTokens
+				usage.In -= usage.Cached
+				if usage.In < 0 {
+					usage.In = 0
+				}
+			}
 		}
 
 		events := TranslateResponsesStreamEvent(streamEvent, state)
@@ -704,12 +784,48 @@ func normalizeNativeMessagesBody(body []byte, newModel string, replaceModel bool
 
 	delete(obj, "context_management")
 	stripCacheControlScope(obj)
+
+	// Rewrite thinking.type "enabled" -> "adaptive" for Copilot backend compatibility.
+	// Also map budget_tokens to output_config.effort if present.
+	if thinkingRaw, ok := obj["thinking"]; ok {
+		if thinkingObj, ok := thinkingRaw.(map[string]interface{}); ok {
+			if thinkingType, ok := thinkingObj["type"].(string); ok && thinkingType == "enabled" {
+				thinkingObj["type"] = "adaptive"
+				// Map budget_tokens to output_config.effort
+				if budgetTokens, ok := thinkingObj["budget_tokens"]; ok {
+					var effort string
+					switch v := budgetTokens.(type) {
+					case float64:
+						if v <= 1000 {
+							effort = "low"
+						} else if v <= 10000 {
+							effort = "medium"
+						} else {
+							effort = "high"
+						}
+					default:
+						effort = "medium"
+					}
+					if outputConfig, ok := obj["output_config"].(map[string]interface{}); ok {
+						outputConfig["effort"] = effort
+					} else {
+						obj["output_config"] = map[string]interface{}{"effort": effort}
+					}
+					// Remove budget_tokens — Copilot's adaptive mode does not accept it
+					delete(thinkingObj, "budget_tokens")
+				}
+				obj["thinking"] = thinkingObj
+			}
+		}
+	}
+
 	return json.Marshal(obj)
 }
 
 type topLevelFieldInspection struct {
 	Keys                 []string
 	HasContextManagement bool
+	HasEnabledThinking   bool
 }
 
 func inspectTopLevelFields(body []byte) topLevelFieldInspection {
@@ -725,7 +841,18 @@ func inspectTopLevelFields(body []byte) topLevelFieldInspection {
 	slices.Sort(keys)
 
 	_, hasContextManagement := raw["context_management"]
-	return topLevelFieldInspection{Keys: keys, HasContextManagement: hasContextManagement}
+
+	// Check if thinking.type == "enabled" (needs to be rewritten to "adaptive")
+	hasEnabledThinking := false
+	if thinkingRaw, ok := raw["thinking"]; ok {
+		if thinkingObj, ok := thinkingRaw.(map[string]interface{}); ok {
+			if thinkingType, ok := thinkingObj["type"].(string); ok && thinkingType == "enabled" {
+				hasEnabledThinking = true
+			}
+		}
+	}
+
+	return topLevelFieldInspection{Keys: keys, HasContextManagement: hasContextManagement, HasEnabledThinking: hasEnabledThinking}
 }
 
 type cacheControlInspection struct {
@@ -870,4 +997,60 @@ func WriteAnthropicError(w http.ResponseWriter, statusCode int, errorType string
 	}
 
 	json.NewEncoder(w).Encode(errorResp)
+}
+
+// extractNativeResponseUsage parses token usage from a non-streaming native /v1/messages response.
+func extractNativeResponseUsage(data []byte, usage *tokenUsage) {
+	var resp struct {
+		Usage *AnthropicUsage `json:"usage"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil || resp.Usage == nil {
+		return
+	}
+	usage.In = resp.Usage.InputTokens
+	usage.Cached = resp.Usage.CacheReadInputTokens
+	usage.NewCache = resp.Usage.CacheCreationInputTokens
+	usage.Out = resp.Usage.OutputTokens
+}
+
+// extractNativeStreamUsage tries to parse token usage from an SSE line in a native streaming response.
+// Relevant events: message_start (has input usage) and message_delta (has output_tokens).
+func extractNativeStreamUsage(line []byte, usage *tokenUsage) {
+	s := strings.TrimSpace(string(line))
+	if !strings.HasPrefix(s, "data:") {
+		return
+	}
+	data := strings.TrimSpace(strings.TrimPrefix(s, "data:"))
+	if data == "" || data == "[DONE]" {
+		return
+	}
+
+	var event struct {
+		Type  string `json:"type"`
+		Usage *struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+		Message *struct {
+			Usage *AnthropicUsage `json:"usage"`
+		} `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(data), &event); err != nil {
+		return
+	}
+
+	switch event.Type {
+	case "message_start":
+		if event.Message != nil && event.Message.Usage != nil {
+			usage.In = event.Message.Usage.InputTokens
+			usage.Cached = event.Message.Usage.CacheReadInputTokens
+			usage.NewCache = event.Message.Usage.CacheCreationInputTokens
+		}
+	case "message_delta":
+		if event.Usage != nil {
+			usage.Out = event.Usage.OutputTokens
+		}
+	}
 }
