@@ -17,6 +17,7 @@ import (
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/control"
+	"github.com/whtsky/copilot2api/gateway"
 	"github.com/whtsky/copilot2api/gemini"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
@@ -145,6 +146,10 @@ func main() {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		handleAccountRoute(w, r, accountManager, transport, modelsCache)
 	})
+
+	// Gateway load-balancing route: /gw/api/...
+	gwHandler := gateway.NewHandler(accountManager, transport, modelsCache)
+	mux.Handle("/gw/api/", gwHandler)
 
 
 
