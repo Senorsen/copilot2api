@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/internal/models"
+	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/internal/sse"
 	"github.com/whtsky/copilot2api/internal/upstream"
 )
@@ -107,9 +108,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route := "chat_completions" // default fallback
 	var usage tokenUsage
 	accountID, username := h.accountInfo()
+	clientIP := reqctx.GetClientIP(r)
+	affinityAccount, affinityHit, hasCache, isGateway := reqctx.GetAffinity(r.Context())
 	defer func() {
-		slog.Info("anthropic request",
+		logMsg := "anthropic request"
+		attrs := []any{
 			"endpoint", "/v1/messages",
+			"client_ip", clientIP,
 			"model", anthropicReq.Model,
 			"stream", anthropicReq.Stream,
 			"messages", len(anthropicReq.Messages),
@@ -117,14 +122,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"duration_ms", time.Since(start).Milliseconds(),
 			"account_id", accountID,
 			"username", username,
-			"tokens_in_all", usage.In+usage.Cached+usage.NewCache,
+			"tokens_in_all", usage.In + usage.Cached + usage.NewCache,
 			"tokens_in_nocache", usage.In,
 			"tokens_cached", usage.Cached,
 			"tokens_new_cache", usage.NewCache,
 			"tokens_out", usage.Out,
-			"tokens_total_all", usage.In+usage.Cached+usage.NewCache+usage.Out,
-			"tokens_total_nocache", usage.In+usage.Out,
-		)
+			"tokens_total_all", usage.In + usage.Cached + usage.NewCache + usage.Out,
+			"tokens_total_nocache", usage.In + usage.Out,
+		}
+		if isGateway {
+			logMsg = "gateway (anthropic request)"
+			attrs = append(attrs, "cache_control", hasCache, "affinity", affinityHit, "affinity_account", affinityAccount)
+		}
+		slog.Info(logMsg, attrs...)
 	}()
 
 	modelInfo, capabilityFetchFailed := h.getModelInfo(r.Context(), anthropicReq.Model)

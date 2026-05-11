@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/internal/models"
+	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/internal/sse"
 	"github.com/whtsky/copilot2api/internal/types"
 	"github.com/whtsky/copilot2api/internal/upstream"
@@ -63,11 +64,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	endpoint := strings.TrimPrefix(r.URL.Path, "/v1")
 	var usage proxyTokenUsage
 	accountID, username := h.accountInfo()
+	clientIP := reqctx.GetClientIP(r)
+	affinityAccount, affinityHit, _, isGateway := reqctx.GetAffinity(r.Context())
 	defer func() {
 		tokensInNocache := usage.In - usage.Cached
-		slog.Info("proxy request",
+		logMsg := "proxy request"
+		attrs := []any{
 			"method", r.Method,
 			"endpoint", endpoint,
+			"client_ip", clientIP,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"account_id", accountID,
 			"username", username,
@@ -77,8 +82,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"tokens_new_cache", 0,
 			"tokens_out", usage.Out,
 			"tokens_total_all", usage.Total,
-			"tokens_total_nocache", tokensInNocache+usage.Out,
-		)
+			"tokens_total_nocache", tokensInNocache + usage.Out,
+		}
+		if isGateway {
+			logMsg = "gateway (proxy request)"
+			attrs = append(attrs, "affinity", affinityHit, "affinity_account", affinityAccount)
+		}
+		slog.Info(logMsg, attrs...)
 	}()
 
 	switch endpoint {

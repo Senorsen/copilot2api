@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"math/rand"
 	"net/http"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/internal/models"
+	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/proxy"
 )
 
@@ -83,7 +83,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		remainder = "/" + remainder
 	}
 
-	clientIP := getClientIP(r)
+	clientIP := reqctx.GetClientIP(r)
 
 	// Read body once for model/cache extraction, then restore it
 	var bodyBytes []byte
@@ -169,15 +169,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}
 
-	slog.Info("gateway request",
-		"method", r.Method,
-		"endpoint", remainder,
-		"client_ip", clientIP,
-		"account_id", chosenAccountID,
-		"username", tp.GitHubUsername,
-		"affinity", affinityHit,
-		"model", model,
-	)
+	// Inject affinity info into request context for downstream handlers to log.
+	ctx := reqctx.WithAffinity(r.Context(), chosenAccountID, affinityHit, hasCache)
+	r = r.WithContext(ctx)
 
 	// Restore body and rewrite path
 	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
@@ -231,21 +225,6 @@ func (h *Handler) pickOther(pool []string, exclude string) string {
 		return ""
 	}
 	return others[rand.Intn(len(others))]
-}
-
-func getClientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		return strings.TrimSpace(parts[0])
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-	addr := r.RemoteAddr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		return addr[:idx]
-	}
-	return addr
 }
 
 func extractModelAndCache(body []byte, remainder string) (model string, hasCache bool) {
