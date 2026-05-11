@@ -13,7 +13,7 @@ A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthrop
 - **Prompt Caching**: `cache_control` fields are passed through transparently
 - **1M Context**: `anthropic-beta: context-1m-*` header auto-appends `-1m` to model ID
 - **Thinking Mode**: `thinking.type: "enabled"` is rewritten to `"adaptive"` for Claude Code compatibility
-- **Usage Monitoring**: Built-in `/usage` endpoint for quota tracking
+- **Usage Monitoring**: Built-in `/usage` endpoint (Control Plane) for quota tracking
 - **Multi-Account** *(fork feature)*: One process manages multiple Copilot accounts with a Control Plane API
 
 ---
@@ -98,9 +98,30 @@ All inference requests go through this port. The URL includes the account ID:
 | `/api/{account_id}/v1/chat/completions` | POST | OpenAI Chat Completions |
 | `/api/{account_id}/v1/models` | GET | List available models |
 | `/api/{account_id}/v1/*` | ANY | Other paths are proxied as-is |
-| `/usage` | GET | Quota info across all accounts |
+| `/gw/api/v1/messages` | POST | Gateway: Anthropic Messages (load-balanced) |
+| `/gw/api/v1/chat/completions` | POST | Gateway: OpenAI Chat Completions (load-balanced) |
 
-Legacy single-account paths (`/v1/messages`, `/v1/chat/completions`, etc.) are still supported for backward compatibility.
+### Gateway Routes (Load-Balanced)
+
+The `/gw/api/...` routes act as a **load-balancing gateway** — they automatically select from all logged-in accounts on each request, with retry on failure.
+
+**Routes:**
+
+| Path | Description |
+|------|-------------|
+| `/gw/api/v1/messages` | Anthropic Messages API (load-balanced) |
+| `/gw/api/v1/chat/completions` | OpenAI Chat Completions (load-balanced) |
+
+**Features:**
+
+- **Random account selection** across all registered accounts.
+- **IP affinity**: Within a 5-minute window, the same `(client IP, model)` pair preferentially reuses the same account.
+  - *Anthropic*: Affinity only applies when both the incoming request and the stored session carry `cache_control`.
+  - *OpenAI*: Affinity always applies.
+- **Auto-retry**: On failure, the gateway automatically switches to a different account.
+- **`GW_EXCLUDE` environment variable**: Comma-separated list of `account_id` values to exclude from gateway routing (e.g. `GW_EXCLUDE=uuid1,uuid2`).
+
+**Authentication:** Same as the Data Plane — use `API_TOKEN` via `Authorization: Bearer` or `x-api-key`.
 
 ### Authentication
 
@@ -223,6 +244,14 @@ DELETE /accounts/{account_id}
 
 Removes the account and its credentials from disk.
 
+#### Usage / Quota
+
+```
+GET /usage
+```
+
+Returns quota usage across all registered accounts.
+
 ---
 
 ## Environment Variables
@@ -231,6 +260,7 @@ Removes the account and its credentials from disk.
 |----------|-------------|---------|
 | `API_TOKEN` | Data plane auth token (optional) | — |
 | `ADMIN_TOKEN` | Control plane auth token (optional) | — |
+| `GW_EXCLUDE` | Comma-separated `account_id` list to exclude from gateway routing | — |
 | `COPILOT2API_TOKEN_DIR` | Credentials storage directory | `~/.config/copilot2api` |
 | `COPILOT2API_HOST` | Server host | `127.0.0.1` |
 | `COPILOT2API_PORT` | Data plane port | `7777` |
