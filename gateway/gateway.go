@@ -48,12 +48,30 @@ func NewHandler(am *auth.AccountManager, transport *http.Transport, mc *models.C
 			}
 		}
 	}
-	return &Handler{
+	h := &Handler{
 		am:        am,
 		transport: transport,
 		mc:        mc,
 		exclude:   exclude,
 		affinity:  make(map[string]*affinityEntry),
+	}
+	go h.cleanupLoop()
+	return h
+}
+
+// cleanupLoop periodically removes expired affinity entries to prevent unbounded map growth.
+func (h *Handler) cleanupLoop() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		h.mu.Lock()
+		for k, v := range h.affinity {
+			if now.After(v.ExpiresAt) {
+				delete(h.affinity, k)
+			}
+		}
+		h.mu.Unlock()
 	}
 }
 
