@@ -22,7 +22,6 @@ import (
 // affinityEntry stores the last account used for a given IP+model combo.
 type affinityEntry struct {
 	AccountID string
-	HasCache  bool // for Anthropic: whether the previous request had cache_control
 	ExpiresAt time.Time
 }
 
@@ -118,8 +117,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if exists && time.Now().Before(entry.ExpiresAt) {
 			isAnthropic := strings.Contains(remainder, "/v1/messages")
 			if isAnthropic {
-				// Only use affinity if both previous and current have cache_control
-				if entry.HasCache && hasCache {
+				// Only use affinity if current request has cache_control
+				if hasCache {
 					if h.inPool(entry.AccountID, pool) {
 						chosenAccountID = entry.AccountID
 						affinityHit = true
@@ -168,7 +167,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.mu.Lock()
 			h.affinity[affinityKey] = &affinityEntry{
 				AccountID: chosenAccountID,
-				HasCache:  hasCache,
 				ExpiresAt: time.Now().Add(5 * time.Minute),
 			}
 			h.mu.Unlock()
