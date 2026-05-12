@@ -160,13 +160,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Update affinity record
 	if model != "" {
-		h.mu.Lock()
-		h.affinity[affinityKey] = &affinityEntry{
-			AccountID: chosenAccountID,
-			HasCache:  hasCache,
-			ExpiresAt: time.Now().Add(5 * time.Minute),
+		isAnthropic := strings.Contains(remainder, "/v1/messages")
+		if !isAnthropic || hasCache {
+			// For Anthropic: only update affinity when request has cache_control,
+			// so non-cache requests don't overwrite existing cache affinity records.
+			// For OpenAI: always update affinity.
+			h.mu.Lock()
+			h.affinity[affinityKey] = &affinityEntry{
+				AccountID: chosenAccountID,
+				HasCache:  hasCache,
+				ExpiresAt: time.Now().Add(5 * time.Minute),
+			}
+			h.mu.Unlock()
 		}
-		h.mu.Unlock()
 	}
 
 	// Inject affinity info into request context for downstream handlers to log.
