@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"gorm.io/driver/postgres"
@@ -27,10 +28,19 @@ type AccountCredential struct {
 	UpdatedAt      time.Time
 }
 
+// cacheEntry holds a cached credentials record with expiry.
+type cacheEntry struct {
+	creds     *Credentials
+	expiresAt time.Time
+}
+
+const defaultCacheTTL = 1 * time.Minute
+
 // DBBackend implements Backend using PostgreSQL via GORM.
 type DBBackend struct {
 	db        *gorm.DB
 	encryptor *Encryptor
+	cache     sync.Map // map[accountID]cacheEntry
 }
 
 // NewDBBackend creates a new PostgreSQL storage backend.
@@ -85,6 +95,15 @@ func (d *DBBackend) ListAccounts(ctx context.Context) ([]string, error) {
 }
 
 func (d *DBBackend) LoadCredentials(ctx context.Context, accountID string) (*Credentials, error) {
+	// Check cache first
+	if entry, ok := d.cache.Load(accountID); ok {
+		cached := entry.(cacheEntry)
+		if time.Now().Before(cached.expiresAt) {
+			return cached.creds, nil
+		}
+		d.cache.Delete(accountID)
+	}
+
 	var cred AccountCredential
 	err := d.db.WithContext(ctx).Where("account_id = ?", accountID).First(&cred).Error
 	if err != nil {
@@ -113,11 +132,19 @@ func (d *DBBackend) LoadCredentials(ctx context.Context, accountID string) (*Cre
 		copilotToken = decrypted
 	}
 
-	return &Credentials{
+	result := &Credentials{
 		GitHubToken:    githubToken,
 		GitHubUsername: cred.GitHubUsername,
 		CopilotToken:   copilotToken,
-	}, nil
+	}
+
+	// Cache the result (TTL = min(1min, token remaining validity))
+	d.cache.Store(accountID, cacheEntry{
+		creds:     result,
+		expiresAt: time.Now().Add(defaultCacheTTL),
+	})
+
+	return result, nil
 }
 
 func (d *DBBackend) SaveCredentials(ctx context.Context, accountID string, creds *Credentials) error {
@@ -151,12 +178,21 @@ func (d *DBBackend) SaveCredentials(ctx context.Context, accountID string, creds
 	// Upsert
 	result := d.db.WithContext(ctx).Where("account_id = ?", accountID).First(&AccountCredential{})
 	if result.Error == gorm.ErrRecordNotFound {
-		return d.db.WithContext(ctx).Create(&cred).Error
+		err := d.db.WithContext(ctx).Create(&cred).Error
+		if err == nil {
+			d.cache.Delete(accountID) // invalidate cache
+		}
+		return err
 	}
-	return d.db.WithContext(ctx).Where("account_id = ?", accountID).Updates(&cred).Error
+	err := d.db.WithContext(ctx).Where("account_id = ?", accountID).Updates(&cred).Error
+	if err == nil {
+		d.cache.Delete(accountID) // invalidate cache
+	}
+	return err
 }
 
 func (d *DBBackend) DeleteAccount(ctx context.Context, accountID string) error {
+	d.cache.Delete(accountID) // invalidate cache
 	return d.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("account_id = ?", accountID).Delete(&AccountCredential{}).Error; err != nil {
 			return err
