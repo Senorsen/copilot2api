@@ -2,52 +2,49 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"sync"
+
+	"github.com/whtsky/copilot2api/storage"
 )
 
 // AccountManager manages multiple auth accounts with ID-based lookup.
 type AccountManager struct {
 	mu       sync.RWMutex
 	accounts map[string]*Client // account_id -> client
-	baseDir  string
+	backend  storage.Backend
+	baseDir  string // only used for file backend compat
 }
 
-// NewAccountManager creates an account manager from a base directory.
-// Each subdirectory name is the account_id.
-func NewAccountManager(baseDir string) (*AccountManager, error) {
-	if err := os.MkdirAll(baseDir, 0700); err != nil {
-		return nil, fmt.Errorf("failed to create base directory: %w", err)
-	}
-
+// NewAccountManager creates an account manager backed by the given storage backend.
+func NewAccountManager(backend storage.Backend) (*AccountManager, error) {
 	am := &AccountManager{
 		accounts: make(map[string]*Client),
-		baseDir:  baseDir,
+		backend:  backend,
 	}
 
-	entries, err := os.ReadDir(baseDir)
+	// If it's a file backend, store baseDir for backward compat
+	if fb, ok := backend.(*storage.FileBackend); ok {
+		am.baseDir = fb.BaseDir()
+	}
+
+	ctx := context.Background()
+	ids, err := backend.ListAccounts(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read base directory: %w", err)
+		return nil, fmt.Errorf("failed to list accounts: %w", err)
 	}
 
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		id := entry.Name()
-		dir := filepath.Join(baseDir, id)
-		// Skip directories that don't contain credentials.json (e.g. lost+found)
-		credPath := filepath.Join(dir, "credentials.json")
-		if _, err := os.Stat(credPath); os.IsNotExist(err) {
-			slog.Debug("skipping directory without credentials.json", "id", id)
-			continue
-		}
-		client, err := NewClient(dir)
+	for _, id := range ids {
+		creds, err := backend.LoadCredentials(ctx, id)
 		if err != nil {
-			slog.Warn("skipping account directory", "id", id, "error", err)
+			slog.Warn("skipping account", "id", id, "error", err)
+			continue
+		}
+		client, err := NewClientFromCredentials(id, creds, backend)
+		if err != nil {
+			slog.Warn("skipping account", "id", id, "error", err)
 			continue
 		}
 		am.accounts[id] = client
@@ -71,7 +68,7 @@ func (am *AccountManager) AddAccount(id string, client *Client) {
 	am.accounts[id] = client
 }
 
-// RemoveAccount removes an account and deletes its storage directory.
+// RemoveAccount removes an account and deletes its storage.
 func (am *AccountManager) RemoveAccount(id string) error {
 	am.mu.Lock()
 	defer am.mu.Unlock()
@@ -79,9 +76,7 @@ func (am *AccountManager) RemoveAccount(id string) error {
 		return fmt.Errorf("account %s not found", id)
 	}
 	delete(am.accounts, id)
-	// Remove storage directory
-	dir := filepath.Join(am.baseDir, id)
-	return os.RemoveAll(dir)
+	return am.backend.DeleteAccount(context.Background(), id)
 }
 
 // ListAccounts returns all account IDs and their GitHub usernames.
@@ -137,9 +132,36 @@ func (am *AccountManager) Count() int {
 	return len(am.accounts)
 }
 
-// BaseDir returns the base directory for account storage.
+// BaseDir returns the base directory for account storage (file backend only).
 func (am *AccountManager) BaseDir() string {
 	return am.baseDir
+}
+
+// Backend returns the storage backend.
+func (am *AccountManager) Backend() storage.Backend {
+	return am.backend
+}
+
+// NewClientFromCredentials creates a Client from storage credentials.
+func NewClientFromCredentials(accountID string, creds *storage.Credentials, backend storage.Backend) (*Client, error) {
+	stored := &StoredCredentials{
+		GitHubToken:    creds.GitHubToken,
+		GitHubUsername: creds.GitHubUsername,
+	}
+
+	// Decode CopilotToken if present
+	if len(creds.CopilotToken) > 0 {
+		var ct CopilotToken
+		if err := json.Unmarshal(creds.CopilotToken, &ct); err == nil {
+			stored.CopilotToken = &ct
+		}
+	}
+
+	return &Client{
+		accountID: accountID,
+		backend:   backend,
+		creds:     stored,
+	}, nil
 }
 
 // --- TokenProvider implementation for a specific account ---

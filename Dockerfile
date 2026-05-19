@@ -1,12 +1,12 @@
 FROM golang:1.26-alpine AS build
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod ./
+RUN go mod download || true
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /copilot2api .
+RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /copilot2api .
 
-FROM scratch
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+FROM alpine:3.21
+RUN apk add --no-cache ca-certificates
 COPY --from=build /copilot2api /copilot2api
 ENV HOME=/root
 ENV COPILOT2API_HOST=0.0.0.0

@@ -22,6 +22,7 @@ import (
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
 	"github.com/whtsky/copilot2api/proxy"
+	"github.com/whtsky/copilot2api/storage"
 )
 
 var version = "dev"
@@ -104,8 +105,43 @@ func main() {
 		}
 	}
 
+	// Initialize storage backend
+	storageMode := os.Getenv("STORAGE")
+	if storageMode == "" {
+		storageMode = "file"
+	}
+
+	var backend storage.Backend
+	switch storageMode {
+	case "file":
+		fb, err := storage.NewFileBackend(*tokenDir)
+		if err != nil {
+			slog.Error("failed to initialize file backend", "error", err)
+			os.Exit(1)
+		}
+		backend = fb
+	case "db":
+		masterKey, err := storage.GetMasterKey()
+		if err != nil {
+			slog.Error("failed to get master key", "error", err)
+			os.Exit(1)
+		}
+		encryptor := storage.NewEncryptor(masterKey)
+		db, err := storage.NewDBBackend(encryptor)
+		if err != nil {
+			slog.Error("failed to initialize database backend", "error", err)
+			os.Exit(1)
+		}
+		backend = db
+	default:
+		slog.Error("unsupported STORAGE mode", "mode", storageMode)
+		os.Exit(1)
+	}
+
+	slog.Info("storage backend initialized", "mode", storageMode)
+
 	// Initialize account manager
-	accountManager, err := auth.NewAccountManager(*tokenDir)
+	accountManager, err := auth.NewAccountManager(backend)
 	if err != nil {
 		slog.Error("failed to initialize account manager", "error", err)
 		os.Exit(1)

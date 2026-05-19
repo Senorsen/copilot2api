@@ -3,43 +3,45 @@ package auth
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/whtsky/copilot2api/internal/copilot"
+	"github.com/whtsky/copilot2api/storage"
 )
 
 type Client struct {
-	storage   *TokenStorage
+	accountID string
+	backend   storage.Backend
+	storage   *TokenStorage // legacy file storage (nil when using backend)
 	mu        sync.RWMutex
 	creds     *StoredCredentials
-	refreshMu sync.Mutex // serializes refresh/device-flow operations
+	refreshMu sync.Mutex
 }
 
-// NewClient creates a new auth client
+// NewClient creates a new auth client from a token directory (legacy file mode).
 func NewClient(tokenDir string) (*Client, error) {
-	storage, err := NewTokenStorage(tokenDir)
+	st, err := NewTokenStorage(tokenDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token storage: %w", err)
 	}
 
-	creds, err := storage.LoadCredentials()
+	creds, err := st.LoadCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load credentials: %w", err)
 	}
 
 	return &Client{
-		storage: storage,
+		storage: st,
 		creds:   creds,
 	}, nil
 }
 
 // GetValidToken returns a valid Copilot token, performing authentication if necessary
 func (c *Client) GetValidToken(ctx context.Context) (*CopilotToken, error) {
-	// Fast path: check with read lock only
 	c.mu.RLock()
 	if c.creds.CopilotToken != nil && c.creds.CopilotToken.IsTokenUsable() {
 		token := c.creds.CopilotToken
@@ -48,11 +50,9 @@ func (c *Client) GetValidToken(ctx context.Context) (*CopilotToken, error) {
 	}
 	c.mu.RUnlock()
 
-	// Slow path: serialize refreshes so only one goroutine does network I/O
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
 
-	// Re-check: another goroutine may have refreshed while we waited
 	c.mu.RLock()
 	if c.creds.CopilotToken != nil && c.creds.CopilotToken.IsTokenUsable() {
 		token := c.creds.CopilotToken
@@ -61,9 +61,6 @@ func (c *Client) GetValidToken(ctx context.Context) (*CopilotToken, error) {
 	}
 	c.mu.RUnlock()
 
-	// Network calls happen here WITHOUT holding mu, so readers are not blocked.
-
-	// If we have a GitHub token, try to refresh Copilot token
 	c.mu.RLock()
 	hasGitHubToken := c.creds.GitHubToken != ""
 	c.mu.RUnlock()
@@ -79,13 +76,10 @@ func (c *Client) GetValidToken(ctx context.Context) (*CopilotToken, error) {
 		}
 	}
 
-	// Device flow is interactive and must not block request serving.
-	// It should only be triggered at startup via RunDeviceFlowIfNeeded.
 	return nil, fmt.Errorf("authentication required: no valid GitHub token available (run device flow at startup)")
 }
 
-// GetToken returns a valid Copilot bearer token string. It satisfies the
-// upstream.TokenProvider interface.
+// GetToken returns a valid Copilot bearer token string.
 func (c *Client) GetToken(ctx context.Context) (string, error) {
 	tok, err := c.GetValidToken(ctx)
 	if err != nil {
@@ -104,9 +98,8 @@ func (c *Client) GetBaseURL() string {
 	return DefaultBaseURL
 }
 
-
 // EnsureAuthenticated runs the interactive device flow if needed and verifies
-// that a valid Copilot token can be obtained. Call this at startup only.
+// that a valid Copilot token can be obtained.
 func (c *Client) EnsureAuthenticated(ctx context.Context) error {
 	if err := c.RunDeviceFlowIfNeeded(); err != nil {
 		return fmt.Errorf("device flow failed: %w", err)
@@ -118,15 +111,14 @@ func (c *Client) EnsureAuthenticated(ctx context.Context) error {
 }
 
 // RunDeviceFlowIfNeeded performs the interactive OAuth device flow if no
-// valid GitHub token is stored. This must be called at startup — not during
-// request serving, since it blocks waiting for user interaction.
+// valid GitHub token is stored.
 func (c *Client) RunDeviceFlowIfNeeded() error {
 	c.mu.RLock()
 	hasGitHubToken := c.creds.GitHubToken != ""
 	c.mu.RUnlock()
 
 	if hasGitHubToken {
-		return nil // already have a token, refresh path will handle expiry
+		return nil
 	}
 
 	return c.performDeviceFlow()
@@ -135,19 +127,16 @@ func (c *Client) RunDeviceFlowIfNeeded() error {
 func (c *Client) performDeviceFlow() error {
 	slog.Info("starting GitHub Device Flow OAuth")
 
-	// Step 1: Get device code
 	deviceResp, err := InitiateDeviceFlow()
 	if err != nil {
 		return fmt.Errorf("failed to initiate device flow: %w", err)
 	}
 
-	// Step 2: Display user code
 	fmt.Printf("\n🔐 GitHub Authentication Required\n")
 	fmt.Printf("Please visit: %s\n", deviceResp.VerificationURI)
 	fmt.Printf("Enter code: %s\n\n", deviceResp.UserCode)
 	fmt.Printf("Waiting for authorization...")
 
-	// Step 3: Poll for access token
 	timeout := time.Duration(deviceResp.ExpiresIn) * time.Second
 	accessToken, err := PollForAccessToken(deviceResp.DeviceCode, deviceResp.Interval, timeout)
 	if err != nil {
@@ -156,12 +145,10 @@ func (c *Client) performDeviceFlow() error {
 
 	fmt.Printf("\n✅ Authentication successful!\n\n")
 
-	// Store GitHub token
 	c.mu.Lock()
 	c.creds.GitHubToken = accessToken
 	c.mu.Unlock()
 
-	// Get Copilot token
 	if err := c.refreshCopilotToken(); err != nil {
 		return fmt.Errorf("failed to get copilot token: %w", err)
 	}
@@ -173,12 +160,10 @@ func (c *Client) refreshCopilotToken() error {
 	start := time.Now()
 	c.mu.RLock()
 	username := c.creds.GitHubUsername
-	c.mu.RUnlock()
-	slog.Info("refreshing Copilot token", "username", username)
-
-	c.mu.RLock()
 	githubToken := c.creds.GitHubToken
 	c.mu.RUnlock()
+
+	slog.Info("refreshing Copilot token", "username", username)
 
 	copilotToken, err := GetCopilotToken(githubToken)
 	if err != nil {
@@ -190,14 +175,36 @@ func (c *Client) refreshCopilotToken() error {
 	credsCopy := *c.creds
 	c.mu.Unlock()
 
-	// Save credentials to disk
-	if err := c.storage.SaveCredentials(&credsCopy); err != nil {
-		slog.Warn("failed to save credentials", "error", err, "username", username)
-	}
+	// Persist credentials
+	c.saveCredentials(&credsCopy)
 
 	slog.Info("copilot token refreshed", "expires_at", copilotToken.ExpiresAt, "base_url", copilotToken.BaseURL, "duration_ms", time.Since(start).Milliseconds(), "username", username)
 	return nil
 }
+
+func (c *Client) saveCredentials(creds *StoredCredentials) {
+	// Try new backend first
+	if c.backend != nil && c.accountID != "" {
+		ctJSON, _ := json.Marshal(creds.CopilotToken)
+		storageCreds := &storage.Credentials{
+			GitHubToken:    creds.GitHubToken,
+			GitHubUsername: creds.GitHubUsername,
+			CopilotToken:   ctJSON,
+		}
+		if err := c.backend.SaveCredentials(context.Background(), c.accountID, storageCreds); err != nil {
+			slog.Warn("failed to save credentials to backend", "error", err, "account_id", c.accountID)
+		}
+		return
+	}
+
+	// Legacy file storage
+	if c.storage != nil {
+		if err := c.storage.SaveCredentials(creds); err != nil {
+			slog.Warn("failed to save credentials", "error", err)
+		}
+	}
+}
+
 // UsageInfo contains Copilot usage and quota information
 type UsageInfo struct {
 	SKU                  string      `json:"sku"`
@@ -207,8 +214,6 @@ type UsageInfo struct {
 	EnterpriseList       []int       `json:"enterprise_list,omitempty"`
 	OrganizationList     []string    `json:"organization_list,omitempty"`
 }
-
-
 
 // GetUsageInfo fetches usage info from the Copilot token endpoint
 func (c *Client) GetUsageInfo(ctx context.Context) (*UsageInfo, error) {

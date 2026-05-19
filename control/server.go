@@ -7,21 +7,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/storage"
 )
 
 // generateUUID generates a random UUID v4 string.
 func generateUUID() string {
 	var buf [16]byte
 	_, _ = rand.Read(buf[:])
-	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
-	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
+	buf[6] = (buf[6] & 0x0f) | 0x40
+	buf[8] = (buf[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
@@ -31,7 +30,7 @@ type Server struct {
 	am         *auth.AccountManager
 	adminToken string
 	mu         sync.Mutex
-	flows      map[string]*pendingFlow // progressID -> flow state
+	flows      map[string]*pendingFlow
 }
 
 type pendingFlow struct {
@@ -43,7 +42,7 @@ type pendingFlow struct {
 	AccountID       string `json:"account_id,omitempty"`
 	GitHubUsername  string `json:"github_username,omitempty"`
 	UsernameSuffix  string `json:"-"`
-	Status          string `json:"status"` // pending, completed, expired, error
+	Status          string `json:"status"`
 	Error           string `json:"error,omitempty"`
 	cancel          context.CancelFunc
 }
@@ -67,7 +66,6 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.adminToken == "" {
-			// No token configured = no auth required (dev mode)
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -91,7 +89,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse optional request body
 	var reqBody struct {
 		UsernameSuffix string `json:"username_suffix"`
 	}
@@ -99,7 +96,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&reqBody)
 	}
 
-	// Initiate device flow
 	deviceResp, err := auth.InitiateDeviceFlow()
 	if err != nil {
 		slog.Error("failed to initiate device flow", "error", err)
@@ -126,7 +122,6 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.flows[progressID] = flow
 	s.mu.Unlock()
 
-	// Poll in background
 	go s.pollDeviceFlow(ctx, progressID, flow)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
@@ -153,14 +148,12 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 		return
 	}
 
-	// Fetch GitHub username
 	username, err := auth.FetchGitHubUsername(accessToken)
 	if err != nil {
 		slog.Warn("failed to fetch GitHub username", "error", err)
 		username = ""
 	}
 
-	// Check username_suffix restriction
 	if flow.UsernameSuffix != "" && username != "" {
 		if !strings.HasSuffix(username, flow.UsernameSuffix) {
 			s.mu.Lock()
@@ -168,33 +161,28 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 			flow.Error = fmt.Sprintf("username %q does not end with required suffix %q", username, flow.UsernameSuffix)
 			flow.GitHubUsername = username
 			s.mu.Unlock()
-			slog.Warn("rejected account due to username suffix mismatch", "username", username, "required_suffix", flow.UsernameSuffix)
 			return
 		}
 	}
 
-	// Create account directory and client
 	accountID := generateUUID()
-	accountDir := filepath.Join(s.am.BaseDir(), accountID)
-	if err := os.MkdirAll(accountDir, 0700); err != nil {
+	backend := s.am.Backend()
+
+	// Create account in backend
+	if err := backend.CreateAccount(ctx, accountID); err != nil {
 		s.mu.Lock()
 		flow.Status = "error"
-		flow.Error = "failed to create account directory"
+		flow.Error = "failed to create account: " + err.Error()
 		s.mu.Unlock()
 		return
 	}
 
 	// Save credentials
-	storage, err := auth.NewTokenStorage(accountDir)
-	if err != nil {
-		s.mu.Lock()
-		flow.Status = "error"
-		flow.Error = "failed to create storage"
-		s.mu.Unlock()
-		return
+	creds := &storage.Credentials{
+		GitHubToken:    accessToken,
+		GitHubUsername: username,
 	}
-	creds := &auth.StoredCredentials{GitHubToken: accessToken, GitHubUsername: username}
-	if err := storage.SaveCredentials(creds); err != nil {
+	if err := backend.SaveCredentials(ctx, accountID, creds); err != nil {
 		s.mu.Lock()
 		flow.Status = "error"
 		flow.Error = "failed to save credentials"
@@ -202,8 +190,8 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 		return
 	}
 
-	// Create client and authenticate (get copilot token)
-	client, err := auth.NewClient(accountDir)
+	// Create client from stored credentials
+	client, err := auth.NewClientFromCredentials(accountID, creds, backend)
 	if err != nil {
 		s.mu.Lock()
 		flow.Status = "error"
@@ -231,7 +219,6 @@ func (s *Server) pollDeviceFlow(ctx context.Context, progressID string, flow *pe
 }
 
 func (s *Server) handleAccountRoute(w http.ResponseWriter, r *http.Request) {
-	// Parse: /accounts/{id} or /accounts/{id}/status
 	path := strings.TrimPrefix(r.URL.Path, "/accounts/")
 	parts := strings.SplitN(path, "/", 2)
 	id := parts[0]
@@ -241,7 +228,6 @@ func (s *Server) handleAccountRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// DELETE /accounts/{id}
 	if r.Method == http.MethodDelete {
 		s.handleDeleteAccount(w, r, id)
 		return
