@@ -132,6 +132,22 @@ func main() {
 			slog.Error("failed to initialize database backend", "error", err)
 			os.Exit(1)
 		}
+
+		// One-time file→DB migration if IMPORT_FILE_TO_DB is set
+		if importDir := os.Getenv("IMPORT_FILE_TO_DB"); importDir != "" {
+			fb, err := storage.NewFileBackend(importDir)
+			if err != nil {
+				slog.Error("failed to initialize file backend for import", "dir", importDir, "error", err)
+				os.Exit(1)
+			}
+			migrated, err := storage.MigrateFileToDB(context.Background(), fb, db)
+			if err != nil {
+				slog.Error("file→DB migration failed", "error", err)
+				os.Exit(1)
+			}
+			slog.Info("file→DB migration complete", "migrated", migrated)
+		}
+
 		backend = db
 	default:
 		slog.Error("unsupported STORAGE mode", "mode", storageMode)
