@@ -1,0 +1,43 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - '**'
+
+jobs:
+  build-and-push:
+    if: github.repository == 'Senorsen/copilot2api'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate tags
+        id: tags
+        run: |
+          DATE=$(date -u +%Y%m%d)
+          BRANCH=${GITHUB_REF_NAME}
+          SHA=$(echo "$GITHUB_SHA" | cut -c1-8)
+          TAG="${DATE}-${BRANCH}-${SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/senorsen/copilot2api:${{ steps.tags.outputs.tag }}
+            ${{ github.ref_name == 'main' && 'ghcr.io/senorsen/copilot2api:latest' || '' }}
