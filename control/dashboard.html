@@ -211,6 +211,32 @@ function renderChart(data) {
           }
         });
       });
+      // bottom labels: dimension name
+      stackIds.forEach(stk => {
+        const stkDatasets = chart.data.datasets.map((ds, i) => ({ ds, i })).filter(x => x.ds.stack === stk);
+        if (!stkDatasets.length) return;
+        const bottomDsIdx = stkDatasets[0].i;
+        const meta = chart.getDatasetMeta(bottomDsIdx);
+        if (meta.hidden) return;
+        // extract dimension name from label (remove suffix like " (cached)")
+        const dimName = stkDatasets[0].ds.label.replace(/\s*\(.*\)$/, '');
+        if (dimName === 'total') return;
+        meta.data.forEach((bar, bi) => {
+          const info = stackTotals[stk]?.[bi];
+          if (!info || info.total === 0) return;
+          const x = bar.x;
+          const yAxis = chart.scales.y;
+          const bottomY = yAxis.getPixelForValue(0);
+          ctx.fillStyle = '#888';
+          ctx.save();
+          ctx.translate(x, bottomY + 4);
+          ctx.rotate(-Math.PI / 4);
+          ctx.textAlign = 'right';
+          ctx.font = '9px -apple-system, sans-serif';
+          ctx.fillText(dimName, 0, 0);
+          ctx.restore();
+        });
+      });
       ctx.restore();
     }
   };
