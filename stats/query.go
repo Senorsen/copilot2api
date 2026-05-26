@@ -29,12 +29,14 @@ type AccountSummary struct {
 	Username  string `json:"username"`
 }
 
+// aggKey is the map key for aggregating stats by date/account/model.
+type aggKey struct {
+	date, accountID, model string
+}
+
 // Query reads JSONL files and returns aggregated daily stats.
 func Query(baseDir, accountID, model string, start, end time.Time) ([]AggregatedEntry, error) {
-	type key struct {
-		date, accountID, model string
-	}
-	agg := make(map[key]*AggregatedEntry)
+	agg := make(map[aggKey]*AggregatedEntry)
 	var lastUsername map[string]string = make(map[string]string)
 
 	// Determine which account dirs to scan
@@ -110,7 +112,7 @@ func Query(baseDir, accountID, model string, start, end time.Time) ([]Aggregated
 	return result, nil
 }
 
-func readJSONLFile(path string, start, end time.Time, modelFilter string, agg map[struct{ date, accountID, model string }]*AggregatedEntry, usernames map[string]string) {
+func readJSONLFile(path string, start, end time.Time, modelFilter string, agg map[aggKey]*AggregatedEntry, usernames map[string]string) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -133,7 +135,7 @@ func readJSONLFile(path string, start, end time.Time, modelFilter string, agg ma
 			continue
 		}
 
-		k := struct{ date, accountID, model string }{day, e.AccountID, e.Model}
+		k := aggKey{day, e.AccountID, e.Model}
 		entry, ok := agg[k]
 		if !ok {
 			entry = &AggregatedEntry{
