@@ -204,7 +204,7 @@ function fmtUSD(n) { if(n>=1000) return '$'+(n/1000).toFixed(1)+'K'; if(n>=1) re
 function fmtNum(n) { if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
 
 async function fetchData() {
-  const fmt = d => d.toISOString().slice(0,10);
+  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   let start, end;
   const now = new Date();
   if (currentRange === 'month') {
