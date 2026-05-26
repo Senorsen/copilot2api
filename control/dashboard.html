@@ -467,9 +467,9 @@ function renderChart(data) {
     options: {
       responsive: true,
       animation: false,
-      layout: { padding: { top: 75, bottom: 60 } },
+      layout: { padding: { top: 40, bottom: 60 } },
       plugins: {
-        legend: { labels: { color: '#e0e0e0', font: { size: 11 }, padding: 15 } },
+        legend: { display: false },
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}` } }
       },
       scales: {
