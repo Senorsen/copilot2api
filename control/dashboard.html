@@ -220,25 +220,26 @@ function renderChart(data) {
           let y = bar.y - 4;
           ctx.fillStyle = '#e0e0e0';
           ctx.fillText(fmtNum(info.total), x, y);
-          // second line: cached percentage
+          // second line: cached absolute (percentage)
           if (info.cached > 0) {
             y -= 12;
             const pct = (info.cached / info.total * 100).toFixed(0);
             ctx.fillStyle = '#888';
-            ctx.fillText(`${pct}% cached`, x, y);
+            ctx.fillText(`C:${fmtNum(info.cached)} (${pct}%)`, x, y);
           }
         });
       });
-      // bottom labels: dimension name
+      // bottom labels: dimension name (horizontal, truncated)
       stackIds.forEach(stk => {
         const stkDatasets = chart.data.datasets.map((ds, i) => ({ ds, i })).filter(x => x.ds.stack === stk);
         if (!stkDatasets.length) return;
         const bottomDsIdx = stkDatasets[0].i;
         const meta = chart.getDatasetMeta(bottomDsIdx);
         if (meta.hidden) return;
-        // extract dimension name from label (remove suffix like " (cached)")
         const dimName = stkDatasets[0].ds.label.replace(/\s*\(.*\)$/, '');
         if (dimName === 'total') return;
+        // shorten: remove common prefixes
+        const short = dimName.replace(/^claude-/, 'c-').replace(/^gpt-/, 'g-');
         meta.data.forEach((bar, bi) => {
           const info = stackTotals[stk]?.[bi];
           if (!info || info.total === 0) return;
@@ -246,13 +247,9 @@ function renderChart(data) {
           const yAxis = chart.scales.y;
           const bottomY = yAxis.getPixelForValue(0);
           ctx.fillStyle = '#888';
-          ctx.save();
-          ctx.translate(x, bottomY + 4);
-          ctx.rotate(-Math.PI / 4);
-          ctx.textAlign = 'right';
           ctx.font = '9px -apple-system, sans-serif';
-          ctx.fillText(dimName, 0, 0);
-          ctx.restore();
+          ctx.textAlign = 'center';
+          ctx.fillText(short, x, bottomY + 14);
         });
       });
       ctx.restore();
@@ -265,7 +262,7 @@ function renderChart(data) {
     data: { labels: buckets, datasets },
     options: {
       responsive: true,
-      layout: { padding: { top: 30 } },
+      layout: { padding: { top: 30, bottom: 20 } },
       plugins: {
         legend: { labels: { color: '#e0e0e0', font: { size: 11 } } },
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}` } }
