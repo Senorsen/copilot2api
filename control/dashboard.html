@@ -110,8 +110,8 @@ function renderChart(data) {
   let ci = 0;
   [...dims].sort().forEach(dim => {
     const color = colors[ci % colors.length];
-    datasets.push({ label: dim + ' (non-cached)', data: dates.map(d => (byDate[d]?.[dim]?.noncached || 0)), backgroundColor: color, stack: 'stack' });
     datasets.push({ label: dim + ' (cached)', data: dates.map(d => (byDate[d]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: 'stack' });
+    datasets.push({ label: dim + ' (non-cached)', data: dates.map(d => (byDate[d]?.[dim]?.noncached || 0)), backgroundColor: color, stack: 'stack' });
     ci++;
   });
   if (chart) chart.destroy();
