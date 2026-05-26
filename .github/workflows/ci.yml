@@ -97,12 +97,12 @@ jobs:
           BRANCH=${GITHUB_REF_NAME}
           SHA=$(echo "$GITHUB_SHA" | cut -c1-8)
           TAG="${DATETIME}-${BRANCH}-${SHA}"
-          TAGS="ghcr.io/${{ github.repository }}:${TAG}"
+          TAGS="ghcr.io/senorsen/copilot2api:${TAG}"
           if [ "$BRANCH" = "main" ] || [ "${{ github.event_name }}" = "release" ]; then
-            TAGS="${TAGS},ghcr.io/${{ github.repository }}:latest"
+            TAGS="${TAGS},ghcr.io/senorsen/copilot2api:latest"
           fi
           if [ "${{ github.event_name }}" = "release" ]; then
-            TAGS="${TAGS},ghcr.io/${{ github.repository }}:${{ github.ref_name }}"
+            TAGS="${TAGS},ghcr.io/senorsen/copilot2api:${{ github.ref_name }}"
           fi
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
