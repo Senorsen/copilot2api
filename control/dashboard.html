@@ -167,12 +167,61 @@ function renderChart(data) {
     }
     ci++;
   });
+  // build per-stack totals for top labels
+  const stackIds = [...new Set(datasets.map(d => d.stack))];
+  const stackTotals = {}; // {stack: {bucketIdx: {total, cached, noncached}}}
+  stackIds.forEach(stk => {
+    stackTotals[stk] = {};
+    buckets.forEach((_, bi) => {
+      let cached = 0, noncached = 0;
+      datasets.filter(ds => ds.stack === stk).forEach(ds => {
+        if (ds.label.includes('cached') && !ds.label.includes('non-cached')) cached += (ds.data[bi] || 0);
+        else noncached += (ds.data[bi] || 0);
+      });
+      stackTotals[stk][bi] = { total: cached + noncached, cached, noncached };
+    });
+  });
+
+  const topLabelPlugin = {
+    id: 'topLabels',
+    afterDraw(chart) {
+      const { ctx } = chart;
+      ctx.save();
+      ctx.font = '10px -apple-system, sans-serif';
+      ctx.textAlign = 'center';
+      stackIds.forEach(stk => {
+        // find the last (topmost) dataset in this stack
+        const stkDatasets = chart.data.datasets.map((ds, i) => ({ ds, i })).filter(x => x.ds.stack === stk);
+        if (!stkDatasets.length) return;
+        const topDsIdx = stkDatasets[stkDatasets.length - 1].i;
+        const meta = chart.getDatasetMeta(topDsIdx);
+        if (meta.hidden) return;
+        meta.data.forEach((bar, bi) => {
+          const info = stackTotals[stk]?.[bi];
+          if (!info || info.total === 0) return;
+          const x = bar.x;
+          let y = bar.y - 4;
+          ctx.fillStyle = '#e0e0e0';
+          ctx.fillText(fmtNum(info.total), x, y);
+          // second line: cached / noncached breakdown
+          if (info.cached > 0 && info.noncached > 0) {
+            y -= 12;
+            ctx.fillStyle = '#888';
+            ctx.fillText(`C:${fmtNum(info.cached)}`, x, y);
+          }
+        });
+      });
+      ctx.restore();
+    }
+  };
+
   if (chart) chart.destroy();
   chart = new Chart(document.getElementById('chart'), {
     type: 'bar',
     data: { labels: buckets, datasets },
     options: {
       responsive: true,
+      layout: { padding: { top: 30 } },
       plugins: {
         legend: { labels: { color: '#e0e0e0', font: { size: 11 } } },
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}` } }
@@ -181,7 +230,8 @@ function renderChart(data) {
         x: { stacked: true, ticks: { color: '#888' } },
         y: { stacked: true, ticks: { color: '#888', callback: v => fmtNum(v) } }
       }
-    }
+    },
+    plugins: [topLabelPlugin]
   });
 }
 
