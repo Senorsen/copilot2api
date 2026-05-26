@@ -50,15 +50,9 @@ function showDashboard() {
   <button class="btn" onclick="document.getElementById('apiToken').type = document.getElementById('apiToken').type === 'password' ? 'text' : 'password'">👁</button>
   <span class="status" id="tokenStatus"></span>
   <div class="sep"></div>
-  <button class="btn" id="btnRefresh">🔄 Refresh</button>
-  <select id="autoRefresh">
-    <option value="0">Auto: Off</option>
-    <option value="60">1min</option>
-    <option value="120">2min</option>
-    <option value="300">5min</option>
-    <option value="1800">30min</option>
-    <option value="3600">1h</option>
-  </select>
+  <button class="btn" id="btnRefresh">🔄</button>
+  <span class="lbl">Auto:</span>
+  <button class="btn ar" data-ar="0">Off</button><button class="btn ar" data-ar="60">1m</button><button class="btn ar" data-ar="120">2m</button><button class="btn ar active3" data-ar="300">5m</button><button class="btn ar" data-ar="1800">30m</button><button class="btn ar" data-ar="3600">1h</button>
 </div>
 <div class="controls">
   <span class="lbl">Range:</span>
@@ -129,11 +123,18 @@ function showDashboard() {
   document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; render(); };
   document.getElementById('apiToken').onchange = e => { localStorage.setItem('c2a_token', e.target.value); fetchPricing(); fetchData(); };
 
-  // Auto-refresh
-  const arEl = document.getElementById('autoRefresh');
-  arEl.value = localStorage.getItem('c2a_autoRefresh') || '300';
-  setupAutoRefresh();
-  arEl.onchange = () => { localStorage.setItem('c2a_autoRefresh', arEl.value); setupAutoRefresh(); };
+  // Auto-refresh buttons
+  const savedAR = localStorage.getItem('c2a_autoRefresh') || '300';
+  document.querySelectorAll('.ar').forEach(b => {
+    if (b.dataset.ar === savedAR) { b.classList.add('active3'); } else { b.classList.remove('active3'); }
+    b.onclick = () => {
+      document.querySelectorAll('.ar').forEach(x => x.classList.remove('active3'));
+      b.classList.add('active3');
+      localStorage.setItem('c2a_autoRefresh', b.dataset.ar);
+      setupAutoRefresh(+b.dataset.ar);
+    };
+  });
+  setupAutoRefresh(+savedAR);
   document.getElementById('btnRefresh').onclick = () => fetchData();
 
   fetchPricing();
@@ -141,9 +142,8 @@ function showDashboard() {
 }
 
 let autoRefreshTimer = null;
-function setupAutoRefresh() {
+function setupAutoRefresh(secs) {
   if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
-  const secs = parseInt(document.getElementById('autoRefresh').value);
   if (secs > 0) { autoRefreshTimer = setInterval(fetchData, secs * 1000); }
 }
 
