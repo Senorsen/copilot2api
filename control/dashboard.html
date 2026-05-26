@@ -155,15 +155,15 @@ function renderChart(data) {
   const tv = currentTokenView;
   [...dims].sort().forEach(dim => {
     const color = colors[ci % colors.length];
+    const stk = 'stk_' + ci; // each dimension gets its own stack = grouped bars
     if (tv === 'input') {
-      datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: 'stack' });
-      datasets.push({ label: dim + ' (input)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: 'stack' });
+      datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
+      datasets.push({ label: dim + ' (input)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: stk });
     } else if (tv === 'output') {
-      datasets.push({ label: dim + ' (output)', data: buckets.map(b => (byBucket[b]?.[dim]?.output || 0)), backgroundColor: color, stack: 'stack' });
+      datasets.push({ label: dim + ' (output)', data: buckets.map(b => (byBucket[b]?.[dim]?.output || 0)), backgroundColor: color, stack: stk });
     } else {
-      // All: cached at bottom (light), then non-cached input + output combined (solid)
-      datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: 'stack' });
-      datasets.push({ label: dim + ' (non-cached)', data: buckets.map(b => ((byBucket[b]?.[dim]?.noncached || 0) + (byBucket[b]?.[dim]?.output || 0))), backgroundColor: color, stack: 'stack' });
+      datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
+      datasets.push({ label: dim + ' (non-cached)', data: buckets.map(b => ((byBucket[b]?.[dim]?.noncached || 0) + (byBucket[b]?.[dim]?.output || 0))), backgroundColor: color, stack: stk });
     }
     ci++;
   });
