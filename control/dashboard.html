@@ -6,21 +6,24 @@
 <title>copilot2api Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
-:root { --bg: #1a1a2e; --surface: #16213e; --border: #0f3460; --text: #e0e0e0; --muted: #888; --accent: #0ea5e9; --accent2: #7c3aed; }
+:root { --bg: #1a1a2e; --surface: #16213e; --border: #0f3460; --text: #e0e0e0; --muted: #888; --accent: #0ea5e9; --accent2: #7c3aed; --accent3: #10b981; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1.5rem; }
 .container { max-width: 1200px; margin: 0 auto; }
 h1 { margin-bottom: 1rem; font-size: 1.5rem; }
-.controls { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
+.controls { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.8rem; align-items: center; }
 .controls .sep { width: 1px; height: 1.5rem; background: var(--border); margin: 0 0.3rem; }
-.btn { padding: 0.4rem 0.8rem; border: none; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); color: var(--text); cursor: pointer; font-size: 0.8rem; }
+.controls .lbl { font-size: 0.75rem; color: var(--muted); margin-right: 0.2rem; }
+.btn { padding: 0.35rem 0.7rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); cursor: pointer; font-size: 0.78rem; }
 .btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.active2 { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.btn.active3 { background: var(--accent3); border-color: var(--accent3); color: #fff; }
 .btn:hover { opacity: 0.85; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
-.card .value { font-size: 1.4rem; font-weight: 700; margin-top: 0.3rem; }
-.card .label { font-size: 0.78rem; color: var(--muted); }
+select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 0.78rem; cursor: pointer; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.8rem; margin-bottom: 1.2rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
+.card .value { font-size: 1.3rem; font-weight: 700; margin-top: 0.2rem; }
+.card .label { font-size: 0.75rem; color: var(--muted); }
 .chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
 canvas { width: 100% !important; }
 </style>
@@ -30,38 +33,79 @@ canvas { width: 100% !important; }
 <script>
 const app = document.getElementById('app');
 let chart = null;
-let currentRange = 30;
-let currentDimension = 'model';
-let currentAggr = 'day';
+let currentRange = 30, currentAggr = 'day', currentDimension = 'model', currentTokenView = 'all';
+let filterModel = '', filterAccount = '';
+let rawData = [];
 
 function showDashboard() {
   app.innerHTML = `<h1>📊 copilot2api Usage</h1>
 <div class="controls">
-  <button class="btn" data-d="7">7d</button><button class="btn active" data-d="30">30d</button><button class="btn" data-d="90">90d</button><button class="btn" data-d="180">180d</button><button class="btn" data-d="365">1y</button>
+  <span class="lbl">Range:</span>
+  <button class="btn range" data-d="7">7d</button><button class="btn range active" data-d="30">30d</button><button class="btn range" data-d="90">90d</button><button class="btn range" data-d="180">180d</button><button class="btn range" data-d="365">1y</button>
   <div class="sep"></div>
+  <span class="lbl">Group:</span>
   <button class="btn aggr active2" data-a="day">Day</button><button class="btn aggr" data-a="week">Week</button><button class="btn aggr" data-a="month">Month</button>
   <div class="sep"></div>
+  <span class="lbl">Tokens:</span>
+  <button class="btn tv active3" data-tv="all">All</button><button class="btn tv" data-tv="input">Input</button><button class="btn tv" data-tv="output">Output</button>
+</div>
+<div class="controls">
+  <span class="lbl">Dimension:</span>
   <button class="btn dim active" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim" data-dim="all">All</button>
+  <div class="sep"></div>
+  <span class="lbl">Filter:</span>
+  <select id="fModel"><option value="">All Models</option></select>
+  <select id="fAccount"><option value="">All Accounts</option></select>
 </div>
 <div class="cards" id="cards"></div>
 <div class="chart-container"><canvas id="chart"></canvas></div>`;
-  document.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { currentRange = +b.dataset.d; document.querySelectorAll('[data-d]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); loadData(); });
-  document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); loadData(); });
-  document.querySelectorAll('.dim').forEach(b => b.onclick = () => { currentDimension = b.dataset.dim; document.querySelectorAll('.dim').forEach(x=>x.classList.remove('active')); b.classList.add('active'); loadData(); });
-  loadData();
+
+  document.querySelectorAll('.range').forEach(b => b.onclick = () => { currentRange = +b.dataset.d; document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); b.classList.add('active'); fetchData(); });
+  document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); render(); });
+  document.querySelectorAll('.tv').forEach(b => b.onclick = () => { currentTokenView = b.dataset.tv; document.querySelectorAll('.tv').forEach(x=>x.classList.remove('active3')); b.classList.add('active3'); render(); });
+  document.querySelectorAll('.dim').forEach(b => b.onclick = () => { currentDimension = b.dataset.dim; document.querySelectorAll('.dim').forEach(x=>x.classList.remove('active')); b.classList.add('active'); render(); });
+  document.getElementById('fModel').onchange = e => { filterModel = e.target.value; render(); };
+  document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; render(); };
+  fetchData();
 }
 
 function fmtNum(n) { if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
 
-async function loadData() {
+async function fetchData() {
   const end = new Date(); const start = new Date(); start.setDate(start.getDate() - currentRange);
   const fmt = d => d.toISOString().slice(0,10);
   try {
     const r = await fetch(`/usage?start=${fmt(start)}&end=${fmt(end)}`);
     const data = await r.json();
     if (data.error) { console.error(data.error); return; }
-    renderCards(data); renderChart(data);
+    rawData = data;
+    populateFilters();
+    render();
   } catch(e) { console.error(e); }
+}
+
+function populateFilters() {
+  const models = new Set(), accounts = new Set();
+  rawData.forEach(d => { models.add(d.model); accounts.add(d.username || d.account_id); });
+  const fM = document.getElementById('fModel'), fA = document.getElementById('fAccount');
+  const prevM = filterModel, prevA = filterAccount;
+  fM.innerHTML = '<option value="">All Models</option>' + [...models].sort().map(m => `<option value="${m}">${m}</option>`).join('');
+  fA.innerHTML = '<option value="">All Accounts</option>' + [...accounts].sort().map(a => `<option value="${a}">${a}</option>`).join('');
+  fM.value = prevM; fA.value = prevA;
+}
+
+function filtered() {
+  return rawData.filter(d => {
+    if (filterModel && d.model !== filterModel) return false;
+    if (filterAccount && (d.username || d.account_id) !== filterAccount) return false;
+    return true;
+  });
+}
+
+function render() {
+  const data = filtered();
+  renderCards(data);
+  renderChart(data);
 }
 
 function renderCards(data) {
@@ -69,13 +113,12 @@ function renderCards(data) {
   const totalIn = data.reduce((a,d) => a + d.tokens_in, 0);
   const totalCached = data.reduce((a,d) => a + d.tokens_cached, 0);
   const totalOut = data.reduce((a,d) => a + d.tokens_out, 0);
-  const totalAll = totalIn + totalCached + totalOut;
   const cacheRate = (totalIn + totalCached) > 0 ? (totalCached / (totalIn + totalCached) * 100).toFixed(1) : '0.0';
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReqs)}</div></div>
-    <div class="card"><div class="label">Input Tokens</div><div class="value">${fmtNum(totalIn)}</div></div>
-    <div class="card"><div class="label">Cached Tokens</div><div class="value">${fmtNum(totalCached)}</div></div>
-    <div class="card"><div class="label">Output Tokens</div><div class="value">${fmtNum(totalOut)}</div></div>
+    <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalIn)}</div></div>
+    <div class="card"><div class="label">Cached Input</div><div class="value">${fmtNum(totalCached)}</div></div>
+    <div class="card"><div class="label">Output</div><div class="value">${fmtNum(totalOut)}</div></div>
     <div class="card"><div class="label">Cache Rate</div><div class="value">${cacheRate}%</div></div>`;
 }
 
@@ -83,12 +126,9 @@ function aggrKey(dateStr) {
   if (currentAggr === 'day') return dateStr;
   const d = new Date(dateStr + 'T00:00:00');
   if (currentAggr === 'week') {
-    // ISO week: Monday-based
-    const tmp = new Date(d);
-    tmp.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    const tmp = new Date(d); tmp.setDate(d.getDate() - ((d.getDay() + 6) % 7));
     return tmp.toISOString().slice(0,10);
   }
-  // month
   return dateStr.slice(0,7);
 }
 
@@ -103,19 +143,25 @@ function renderChart(data) {
     else k = 'total';
     dims.add(k);
     if (!byBucket[bucket]) byBucket[bucket] = {};
-    if (!byBucket[bucket][k]) byBucket[bucket][k] = { cached: 0, noncached: 0 };
+    if (!byBucket[bucket][k]) byBucket[bucket][k] = { cached: 0, noncached: 0, output: 0 };
     byBucket[bucket][k].cached += d.tokens_cached;
-    byBucket[bucket][k].noncached += d.tokens_in + d.tokens_out; // non-cached = input + output (excluding cache)
+    byBucket[bucket][k].noncached += d.tokens_in;
+    byBucket[bucket][k].output += d.tokens_out;
   });
   const buckets = Object.keys(byBucket).sort();
   const colors = ['#0ea5e9','#7c3aed','#f59e0b','#10b981','#ef4444','#ec4899','#6366f1','#14b8a6'];
   const datasets = [];
   let ci = 0;
+  const tv = currentTokenView;
   [...dims].sort().forEach(dim => {
     const color = colors[ci % colors.length];
-    // cached (lighter) on bottom, non-cached (solid) on top
-    datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '66', stack: 'stack' });
-    datasets.push({ label: dim + ' (non-cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: 'stack' });
+    if (tv === 'all' || tv === 'input') {
+      datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: 'stack' });
+      datasets.push({ label: dim + ' (input)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: 'stack' });
+    }
+    if (tv === 'all' || tv === 'output') {
+      datasets.push({ label: dim + ' (output)', data: buckets.map(b => (byBucket[b]?.[dim]?.output || 0)), backgroundColor: color, borderColor: '#fff3', borderWidth: 1, stack: tv === 'all' ? 'stack2' : 'stack' });
+    }
     ci++;
   });
   if (chart) chart.destroy();
@@ -125,12 +171,8 @@ function renderChart(data) {
     options: {
       responsive: true,
       plugins: {
-        legend: { labels: { color: '#e0e0e0' } },
-        tooltip: {
-          callbacks: {
-            label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}`
-          }
-        }
+        legend: { labels: { color: '#e0e0e0', font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}` } }
       },
       scales: {
         x: { stacked: true, ticks: { color: '#888' } },
