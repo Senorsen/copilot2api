@@ -22,6 +22,7 @@ import (
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/upstream"
 	"github.com/whtsky/copilot2api/proxy"
+	"github.com/whtsky/copilot2api/stats"
 	"github.com/whtsky/copilot2api/storage"
 )
 
@@ -191,16 +192,25 @@ func main() {
 		return upstream.NewClient(tp, transport)
 	}, 5*time.Minute)
 
+	// Stats recorder
+	statsDir := os.Getenv("COPILOT2API_STATS_DIR")
+	if statsDir == "" {
+		statsDir = "./stats"
+	}
+	recorder := stats.NewRecorder(statsDir)
+	defer recorder.Close()
+
 	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()
 
 	// All API routes require account_id: /api/{account_id}/v1/...
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
-		handleAccountRoute(w, r, accountManager, transport, modelsCache)
+		handleAccountRoute(w, r, accountManager, transport, modelsCache, recorder)
 	})
 
 	// Gateway load-balancing route: /gw/api/...
 	gwHandler := gateway.NewHandler(accountManager, transport, modelsCache)
+	gwHandler.Recorder = recorder
 	mux.Handle("/gw/api/", gwHandler)
 
 
@@ -234,7 +244,7 @@ func main() {
 
 	// Create control plane server
 	adminToken := os.Getenv("ADMIN_TOKEN")
-	controlServer := control.NewServer(accountManager, adminToken)
+	controlServer := control.NewServer(accountManager, adminToken, statsDir)
 	controlHTTP := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", *host, *controlPort),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -277,7 +287,7 @@ func main() {
 
 // handleAccountRoute routes /api/{account_id}/... — account_id is always required.
 // The remainder after /api/{account_id}/ is forwarded as-is (e.g. /v1/chat/completions, /v1/messages, /v1beta/models/...).
-func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.AccountManager, transport *http.Transport, mc *models.Cache) {
+func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.AccountManager, transport *http.Transport, mc *models.Cache, recorder *stats.Recorder) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/")
 
 	// Parse as /api/{account_id}/...
@@ -300,22 +310,24 @@ func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.Account
 	r.URL.Path = remainder
 	tp := auth.NewAccountTokenProvider(client)
 	tp.AccountID = accountID
-	handleWithTokenProvider(w, r, tp, transport, mc)
+	handleWithTokenProvider(w, r, tp, transport, mc, recorder)
 }
 
 // handleWithTokenProvider dispatches a request using a specific token provider.
-func handleWithTokenProvider(w http.ResponseWriter, r *http.Request, tp upstream.TokenProvider, transport *http.Transport, mc *models.Cache) {
+func handleWithTokenProvider(w http.ResponseWriter, r *http.Request, tp upstream.TokenProvider, transport *http.Transport, mc *models.Cache, recorder *stats.Recorder) {
 	path := r.URL.Path
 
 	switch {
 	case path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages"):
 		handler := anthropic.NewHandler(tp, transport, mc)
+		handler.StatsRecorder = recorder
 		handler.ServeHTTP(w, r)
 	case strings.HasPrefix(path, "/v1beta/models"):
 		handler := gemini.NewHandler(tp, transport, mc)
 		handler.ServeHTTP(w, r)
 	default:
 		handler := proxy.NewHandler(tp, transport, mc, nil)
+		handler.StatsRecorder = recorder
 		handler.ServeHTTP(w, r)
 	}
 }

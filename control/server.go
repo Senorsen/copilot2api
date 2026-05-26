@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -12,8 +13,12 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/stats"
 	"github.com/whtsky/copilot2api/storage"
 )
+
+//go:embed dashboard.html
+var dashboardHTML []byte
 
 // generateUUID generates a random UUID v4 string.
 func generateUUID() string {
@@ -29,6 +34,7 @@ func generateUUID() string {
 type Server struct {
 	am         *auth.AccountManager
 	adminToken string
+	statsDir   string
 	mu         sync.Mutex
 	flows      map[string]*pendingFlow
 }
@@ -47,10 +53,11 @@ type pendingFlow struct {
 	cancel          context.CancelFunc
 }
 
-func NewServer(am *auth.AccountManager, adminToken string) *Server {
+func NewServer(am *auth.AccountManager, adminToken string, statsDir string) *Server {
 	return &Server{
 		am:         am,
 		adminToken: adminToken,
+		statsDir:   statsDir,
 		flows:      make(map[string]*pendingFlow),
 	}
 }
@@ -60,6 +67,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/accounts/login", s.handleLogin)
 	mux.HandleFunc("/accounts", s.handleListAccounts)
 	mux.Handle("/accounts/", http.HandlerFunc(s.handleAccountRoute))
+	mux.HandleFunc("/usage", s.handleUsageQuery)
+	mux.HandleFunc("/usage/accounts", s.handleUsageAccounts)
+	mux.HandleFunc("/dashboard", s.handleDashboard)
+	mux.HandleFunc("/dashboard/", s.handleDashboard)
 	return s.authMiddleware(mux)
 }
 
@@ -293,4 +304,57 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
+}
+
+func (s *Server) handleUsageQuery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	startStr := r.URL.Query().Get("start")
+	endStr := r.URL.Query().Get("end")
+	if startStr == "" || endStr == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "start and end query params required (YYYY-MM-DD)"})
+		return
+	}
+	start, err := time.Parse("2006-01-02", startStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start date"})
+		return
+	}
+	end, err := time.Parse("2006-01-02", endStr)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end date"})
+		return
+	}
+
+	accountID := r.URL.Query().Get("account_id")
+	model := r.URL.Query().Get("model")
+
+	results, err := stats.Query(s.statsDir, accountID, model, start, end)
+	if err != nil {
+		slog.Error("failed to query stats", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to query stats"})
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
+func (s *Server) handleUsageAccounts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	accounts, err := stats.ListAccounts(s.statsDir)
+	if err != nil {
+		slog.Error("failed to list usage accounts", "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list accounts"})
+		return
+	}
+	writeJSON(w, http.StatusOK, accounts)
+}
+
+func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(dashboardHTML)
 }

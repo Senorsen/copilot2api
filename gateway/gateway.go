@@ -17,6 +17,7 @@ import (
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/proxy"
+	"github.com/whtsky/copilot2api/stats"
 )
 
 // affinityEntry stores the last account used for a given IP+model combo.
@@ -31,6 +32,7 @@ type Handler struct {
 	transport *http.Transport
 	mc        *models.Cache
 	exclude   map[string]bool
+	Recorder  *stats.Recorder
 
 	mu       sync.RWMutex
 	affinity map[string]*affinityEntry // key: ip + "|" + model
@@ -184,9 +186,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case remainder == "/v1/messages" || strings.HasPrefix(remainder, "/v1/messages"):
 		handler := anthropic.NewHandler(tp, h.transport, h.mc)
+		handler.StatsRecorder = h.Recorder
 		handler.ServeHTTP(w, r)
 	default:
 		handler := proxy.NewHandler(tp, h.transport, h.mc, nil)
+		handler.StatsRecorder = h.Recorder
 		handler.ServeHTTP(w, r)
 	}
 }

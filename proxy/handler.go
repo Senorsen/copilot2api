@@ -16,6 +16,7 @@ import (
 	"github.com/whtsky/copilot2api/internal/sse"
 	"github.com/whtsky/copilot2api/internal/types"
 	"github.com/whtsky/copilot2api/internal/upstream"
+	"github.com/whtsky/copilot2api/stats"
 )
 
 // UsageProvider can return usage information for the /usage endpoint.
@@ -27,6 +28,7 @@ type Handler struct {
 	upstream      *upstream.Client
 	usageProvider UsageProvider
 	modelsCache   *models.Cache
+	StatsRecorder *stats.Recorder
 }
 
 // NewHandler creates a new proxy handler.
@@ -63,6 +65,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Extract endpoint from path
 	endpoint := strings.TrimPrefix(r.URL.Path, "/v1")
 	var usage proxyTokenUsage
+	var requestModel string
 	accountID, username := h.accountInfo()
 	clientIP := reqctx.GetClientIP(r)
 	affinityAccount, affinityHit, _, isGateway := reqctx.GetAffinity(r.Context())
@@ -89,6 +92,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			attrs = append(attrs, "affinity", affinityHit, "affinity_account", affinityAccount)
 		}
 		slog.Info(logMsg, attrs...)
+		if h.StatsRecorder != nil && usage.Total > 0 {
+			h.StatsRecorder.Record(stats.Entry{
+				Timestamp:    time.Now(),
+				AccountID:    accountID,
+				Username:     username,
+				Model:        requestModel,
+				Endpoint:     endpoint,
+				Route:        "proxy",
+				TokensIn:     usage.In,
+				TokensOut:    usage.Out,
+				TokensCached: usage.Cached,
+				TokensTotal:  usage.Total,
+				DurationMs:   time.Since(start).Milliseconds(),
+			})
+		}
 	}()
 
 	switch endpoint {
@@ -97,9 +115,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/embeddings":
 		h.handleEmbeddings(w, r, &usage)
 	case "/chat/completions":
-		h.handlePassthrough(w, r, endpoint, &usage)
+		h.handlePassthrough(w, r, endpoint, &usage, &requestModel)
 	case "/responses":
-		h.handlePassthrough(w, r, endpoint, &usage)
+		h.handlePassthrough(w, r, endpoint, &usage, &requestModel)
 	default:
 		WriteOpenAIError(w, http.StatusNotFound, OpenAIErrorTypeInvalidRequest, "Endpoint not found")
 	}
@@ -129,7 +147,7 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePassthrough handles direct passthrough requests
-func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endpoint string, usage *proxyTokenUsage) {
+func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endpoint string, usage *proxyTokenUsage, modelOut *string) {
 	// Check body size before processing — reject oversized payloads with 413
 	var bodyBytes []byte
 	if r.Body != nil {
@@ -144,6 +162,10 @@ func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endp
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	}
+
+	if modelOut != nil && len(bodyBytes) > 0 {
+		*modelOut = extractModelField(bodyBytes)
 	}
 
 	h.handlePassthroughBody(w, r, endpoint, bodyBytes, usage)

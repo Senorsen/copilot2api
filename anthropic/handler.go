@@ -17,12 +17,14 @@ import (
 	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/internal/sse"
 	"github.com/whtsky/copilot2api/internal/upstream"
+	"github.com/whtsky/copilot2api/stats"
 )
 
 // Handler handles Anthropic Messages API requests
 type Handler struct {
 	upstream *upstream.Client
 	models   *models.Cache
+	StatsRecorder *stats.Recorder
 }
 
 // tokenUsage holds token statistics collected during a request.
@@ -135,6 +137,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			attrs = append(attrs, "cache_control", hasCache, "affinity", affinityHit, "affinity_account", affinityAccount)
 		}
 		slog.Info(logMsg, attrs...)
+		if h.StatsRecorder != nil && (usage.In+usage.Cached+usage.NewCache+usage.Out) > 0 {
+			h.StatsRecorder.Record(stats.Entry{
+				Timestamp:      time.Now(),
+				AccountID:      accountID,
+				Username:       username,
+				Model:          anthropicReq.Model,
+				Endpoint:       "/v1/messages",
+				Route:          route,
+				TokensIn:       usage.In + usage.Cached + usage.NewCache,
+				TokensOut:      usage.Out,
+				TokensCached:   usage.Cached,
+				TokensNewCache: usage.NewCache,
+				TokensTotal:    usage.In + usage.Cached + usage.NewCache + usage.Out,
+				DurationMs:     time.Since(start).Milliseconds(),
+			})
+		}
 	}()
 
 	modelInfo, capabilityFetchFailed := h.getModelInfo(r.Context(), anthropicReq.Model)

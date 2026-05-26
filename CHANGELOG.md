@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Features
+
+- Add usage statistics system: records token usage per request to JSONL files (`stats/` package)
+- Add control plane endpoints: `GET /usage` (query aggregated stats), `GET /usage/accounts` (list accounts with data), `GET /dashboard` (HTML dashboard)
+- Add interactive HTML dashboard with Chart.js stacked bar charts, time range selectors, and cache hit rate cards
+- Stats directory configurable via `COPILOT2API_STATS_DIR` env var (default: `./stats`)
+
 ### Docs
 
 - Add `requires_openai_auth = false` to Codex config example in README

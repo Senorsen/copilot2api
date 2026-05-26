@@ -249,7 +249,7 @@ func TestSmartRouting_ChatToResponsesNonStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/chat/completions", nil)
+	h.handlePassthrough(rec, req, "/chat/completions", nil, nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
@@ -328,7 +328,7 @@ func TestSmartRouting_ResponsesToChatNonStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/responses", nil)
+	h.handlePassthrough(rec, req, "/responses", nil, nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
@@ -373,7 +373,7 @@ func TestSmartRouting_PassthroughWhenModelSupportsEndpoint(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/chat/completions", nil)
+	h.handlePassthrough(rec, req, "/chat/completions", nil, nil)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
@@ -429,7 +429,7 @@ func TestSmartRouting_ChatToResponsesStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/chat/completions", nil)
+	h.handlePassthrough(rec, req, "/chat/completions", nil, nil)
 
 	result := rec.Body.String()
 	// Should contain Chat Completions format chunks
@@ -479,7 +479,7 @@ func TestSmartRouting_ResponsesToChatStreaming(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 
-	h.handlePassthrough(rec, req, "/responses", nil)
+	h.handlePassthrough(rec, req, "/responses", nil, nil)
 
 	result := rec.Body.String()
 	// Should contain Responses API format events
