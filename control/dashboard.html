@@ -33,7 +33,7 @@ canvas { width: 100% !important; }
 <script>
 const app = document.getElementById('app');
 let chart = null;
-let currentRange = 30, currentAggr = 'day', currentDimension = 'model', currentTokenView = 'all';
+let currentRange = 30, currentAggr = 'day', currentDims = { model: true, account: false }, currentTokenView = 'all';
 let filterModel = '', filterAccount = '';
 let rawData = [];
 
@@ -51,7 +51,7 @@ function showDashboard() {
 </div>
 <div class="controls">
   <span class="lbl">Dimension:</span>
-  <button class="btn dim active" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim" data-dim="all">All</button>
+  <button class="btn dim active" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim" data-dim="aggr">Aggregated</button>
   <div class="sep"></div>
   <span class="lbl">Filter:</span>
   <select id="fModel"><option value="">All Models</option></select>
@@ -63,7 +63,23 @@ function showDashboard() {
   document.querySelectorAll('.range').forEach(b => b.onclick = () => { currentRange = +b.dataset.d; document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); b.classList.add('active'); fetchData(); });
   document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); render(); });
   document.querySelectorAll('.tv').forEach(b => b.onclick = () => { currentTokenView = b.dataset.tv; document.querySelectorAll('.tv').forEach(x=>x.classList.remove('active3')); b.classList.add('active3'); render(); });
-  document.querySelectorAll('.dim').forEach(b => b.onclick = () => { currentDimension = b.dataset.dim; document.querySelectorAll('.dim').forEach(x=>x.classList.remove('active')); b.classList.add('active'); render(); });
+  document.querySelectorAll('.dim').forEach(b => b.onclick = () => {
+    const dim = b.dataset.dim;
+    if (dim === 'aggr') {
+      currentDims = { model: false, account: false };
+      document.querySelectorAll('.dim').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+    } else {
+      document.querySelector('.dim[data-dim="aggr"]').classList.remove('active');
+      currentDims[dim] = !currentDims[dim];
+      b.classList.toggle('active');
+      if (!currentDims.model && !currentDims.account) {
+        currentDims = { model: false, account: false };
+        document.querySelector('.dim[data-dim="aggr"]').classList.add('active');
+      }
+    }
+    render();
+  });
   document.getElementById('fModel').onchange = e => { filterModel = e.target.value; render(); };
   document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; render(); };
   fetchData();
@@ -138,9 +154,10 @@ function renderChart(data) {
   data.forEach(d => {
     const bucket = aggrKey(d.date);
     let k;
-    if (currentDimension === 'model') k = d.model;
-    else if (currentDimension === 'account') k = d.username || d.account_id;
-    else k = 'total';
+    const parts = [];
+    if (currentDims.model) parts.push(d.model);
+    if (currentDims.account) parts.push(d.username || d.account_id);
+    k = parts.length ? parts.join(' / ') : 'total';
     dims.add(k);
     if (!byBucket[bucket]) byBucket[bucket] = {};
     if (!byBucket[bucket][k]) byBucket[bucket][k] = { cached: 0, noncached: 0, output: 0 };
@@ -203,11 +220,12 @@ function renderChart(data) {
           let y = bar.y - 4;
           ctx.fillStyle = '#e0e0e0';
           ctx.fillText(fmtNum(info.total), x, y);
-          // second line: cached / noncached breakdown
-          if (info.cached > 0 && info.noncached > 0) {
+          // second line: cached percentage
+          if (info.cached > 0) {
             y -= 12;
+            const pct = (info.cached / info.total * 100).toFixed(0);
             ctx.fillStyle = '#888';
-            ctx.fillText(`C:${fmtNum(info.cached)}`, x, y);
+            ctx.fillText(`${pct}% cached`, x, y);
           }
         });
       });
