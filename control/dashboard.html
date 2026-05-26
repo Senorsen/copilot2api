@@ -26,6 +26,11 @@ select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius
 .card .label { font-size: 0.75rem; color: var(--muted); }
 .chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
 canvas { width: 100% !important; }
+.token-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; }
+.token-bar input { flex: 1; max-width: 300px; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 0.78rem; font-family: monospace; }
+.token-bar .status { font-size: 0.75rem; }
+.token-bar .status.ok { color: var(--accent3); }
+.token-bar .status.err { color: #ef4444; }
 </style>
 </head>
 <body>
@@ -39,6 +44,12 @@ let rawData = [];
 
 function showDashboard() {
   app.innerHTML = `<h1>📊 copilot2api Usage</h1>
+<div class="token-bar">
+  <span class="lbl">API Key:</span>
+  <input type="password" id="apiToken" placeholder="Enter control plane admin token" value="${localStorage.getItem('c2a_token') || ''}">
+  <button class="btn" onclick="document.getElementById('apiToken').type = document.getElementById('apiToken').type === 'password' ? 'text' : 'password'">👁</button>
+  <span class="status" id="tokenStatus"></span>
+</div>
 <div class="controls">
   <span class="lbl">Range:</span>
   <button class="btn range" data-d="7">7d</button><button class="btn range active" data-d="30">30d</button><button class="btn range" data-d="90">90d</button><button class="btn range" data-d="180">180d</button><button class="btn range" data-d="365">1y</button>
@@ -82,22 +93,46 @@ function showDashboard() {
   });
   document.getElementById('fModel').onchange = e => { filterModel = e.target.value; render(); };
   document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; render(); };
+  document.getElementById('apiToken').onchange = e => { localStorage.setItem('c2a_token', e.target.value); fetchData(); };
   fetchData();
 }
 
-function fmtNum(n) { if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
+// Pricing per MTok (USD) - 2026 rates
+const PRICING = {
+  'claude-opus-4.7':     { input: 5,  cached: 0.50, output: 25 },
+  'claude-opus-4.6':     { input: 5,  cached: 0.50, output: 25 },
+  'claude-opus-4.6-1m':  { input: 5,  cached: 0.50, output: 25 },
+  'claude-opus-4.5':     { input: 5,  cached: 0.50, output: 25 },
+  'claude-sonnet-4.6':   { input: 3,  cached: 0.30, output: 15 },
+  'claude-sonnet-4.5':   { input: 3,  cached: 0.30, output: 15 },
+  'claude-haiku-4.5':    { input: 1,  cached: 0.10, output: 5 },
+  'claude-haiku-3.5':    { input: 0.80, cached: 0.08, output: 4 },
+  'gpt-5.5':             { input: 5,  cached: 0.50, output: 30 },
+  'gpt-5.4':             { input: 2.5, cached: 0.25, output: 15 },
+  'gpt-4.1':             { input: 2,  cached: 0.20, output: 8 },
+};
+function getPrice(model) { return PRICING[model] || PRICING[Object.keys(PRICING).find(k => model.includes(k))] || null; }
+function fmtUSD(n) { if(n>=1000) return '$'+(n/1000).toFixed(1)+'K'; if(n>=1) return '$'+n.toFixed(2); return '$'+n.toFixed(4); }
+
+function fmtNum(n) { if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
 
 async function fetchData() {
   const end = new Date(); const start = new Date(); start.setDate(start.getDate() - currentRange);
   const fmt = d => d.toISOString().slice(0,10);
+  const token = document.getElementById('apiToken').value;
+  const status = document.getElementById('tokenStatus');
+  if (!token) { status.className = 'status err'; status.textContent = '⚠ Token required'; return; }
+  localStorage.setItem('c2a_token', token);
   try {
-    const r = await fetch(`/usage?start=${fmt(start)}&end=${fmt(end)}`);
+    const r = await fetch(`/usage?start=${fmt(start)}&end=${fmt(end)}`, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (r.status === 401 || r.status === 403) { status.className = 'status err'; status.textContent = '✗ Invalid token'; return; }
     const data = await r.json();
-    if (data.error) { console.error(data.error); return; }
+    if (data.error) { status.className = 'status err'; status.textContent = data.error; return; }
+    status.className = 'status ok'; status.textContent = '✓';
     rawData = data;
     populateFilters();
     render();
-  } catch(e) { console.error(e); }
+  } catch(e) { status.className = 'status err'; status.textContent = e.message; }
 }
 
 function populateFilters() {
@@ -130,12 +165,20 @@ function renderCards(data) {
   const totalCached = data.reduce((a,d) => a + d.tokens_cached, 0);
   const totalOut = data.reduce((a,d) => a + d.tokens_out, 0);
   const cacheRate = (totalIn + totalCached) > 0 ? (totalCached / (totalIn + totalCached) * 100).toFixed(1) : '0.0';
+  // estimated cost per model
+  let estCost = 0;
+  data.forEach(d => {
+    const p = getPrice(d.model);
+    if (!p) return;
+    estCost += (d.tokens_in / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + (d.tokens_out / 1e6) * p.output;
+  });
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReqs)}</div></div>
     <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalIn)}</div></div>
     <div class="card"><div class="label">Cached Input</div><div class="value">${fmtNum(totalCached)}</div></div>
     <div class="card"><div class="label">Output</div><div class="value">${fmtNum(totalOut)}</div></div>
-    <div class="card"><div class="label">Cache Rate</div><div class="value">${cacheRate}%</div></div>`;
+    <div class="card"><div class="label">Cache Rate</div><div class="value">${cacheRate}%</div></div>
+    <div class="card"><div class="label">Est. Cost</div><div class="value" style="color:#f59e0b">${fmtUSD(estCost)}</div></div>`;
 }
 
 function aggrKey(dateStr) {
