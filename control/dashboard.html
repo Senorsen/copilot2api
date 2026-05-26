@@ -11,60 +11,43 @@
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1.5rem; }
 .container { max-width: 1200px; margin: 0 auto; }
 h1 { margin-bottom: 1rem; font-size: 1.5rem; }
-.auth-form { max-width: 400px; margin: 4rem auto; background: var(--surface); padding: 2rem; border-radius: 8px; }
-.auth-form input { width: 100%; padding: 0.6rem; margin: 0.5rem 0; border-radius: 4px; border: 1px solid var(--border); background: var(--bg); color: var(--text); }
-.auth-form button, .btn { padding: 0.5rem 1rem; border: none; border-radius: 4px; background: var(--accent); color: #fff; cursor: pointer; font-size: 0.875rem; }
-.btn.active { background: var(--accent2); }
-.btn:hover { opacity: 0.9; }
 .controls { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 1rem; align-items: center; }
-.controls label { margin-left: 1rem; color: var(--muted); font-size: 0.85rem; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+.controls .sep { width: 1px; height: 1.5rem; background: var(--border); margin: 0 0.3rem; }
+.btn { padding: 0.4rem 0.8rem; border: none; border-radius: 4px; background: var(--surface); border: 1px solid var(--border); color: var(--text); cursor: pointer; font-size: 0.8rem; }
+.btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.active2 { background: var(--accent2); border-color: var(--accent2); color: #fff; }
+.btn:hover { opacity: 0.85; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
-.card .value { font-size: 1.5rem; font-weight: 700; margin-top: 0.3rem; }
-.card .label { font-size: 0.8rem; color: var(--muted); }
+.card .value { font-size: 1.4rem; font-weight: 700; margin-top: 0.3rem; }
+.card .label { font-size: 0.78rem; color: var(--muted); }
 .chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; }
 canvas { width: 100% !important; }
-.logout { position: absolute; top: 1rem; right: 1.5rem; font-size: 0.8rem; color: var(--muted); cursor: pointer; text-decoration: underline; }
 </style>
 </head>
 <body>
 <div class="container" id="app"></div>
 <script>
-const KEY = 'c2a_api_key';
 const app = document.getElementById('app');
 let chart = null;
-
-function getKey() { return localStorage.getItem(KEY); }
-
-function showAuth() {
-  app.innerHTML = `<div class="auth-form"><h2>copilot2api Dashboard</h2><p style="margin:0.5rem 0;color:var(--muted)">Enter your admin API key</p><input id="key" type="password" placeholder="Bearer token"><button onclick="saveKey()">Connect</button></div>`;
-}
-
-function saveKey() {
-  const v = document.getElementById('key').value.trim();
-  if (v) { localStorage.setItem(KEY, v); showDashboard(); }
-}
-
-async function api(path) {
-  const r = await fetch(path, { headers: { 'Authorization': 'Bearer ' + getKey() } });
-  if (r.status === 401) { localStorage.removeItem(KEY); showAuth(); throw new Error('unauthorized'); }
-  return r.json();
-}
-
 let currentRange = 30;
 let currentDimension = 'model';
+let currentAggr = 'day';
 
 function showDashboard() {
-  app.innerHTML = `<span class="logout" onclick="localStorage.removeItem('${KEY}');showAuth()">logout</span><h1>📊 Usage Dashboard</h1>
+  app.innerHTML = `<h1>📊 copilot2api Usage</h1>
 <div class="controls">
-  <button class="btn" data-d="7">7d</button><button class="btn" data-d="14">14d</button><button class="btn active" data-d="30">30d</button><button class="btn" data-d="90">90d</button><button class="btn" data-d="180">180d</button><button class="btn" data-d="365">365d</button>
-  <label><input type="radio" name="dim" value="model" checked> By Model</label>
-  <label><input type="radio" name="dim" value="account"> By Account</label>
+  <button class="btn" data-d="7">7d</button><button class="btn active" data-d="30">30d</button><button class="btn" data-d="90">90d</button><button class="btn" data-d="180">180d</button><button class="btn" data-d="365">1y</button>
+  <div class="sep"></div>
+  <button class="btn aggr active2" data-a="day">Day</button><button class="btn aggr" data-a="week">Week</button><button class="btn aggr" data-a="month">Month</button>
+  <div class="sep"></div>
+  <button class="btn dim active" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim" data-dim="all">All</button>
 </div>
 <div class="cards" id="cards"></div>
 <div class="chart-container"><canvas id="chart"></canvas></div>`;
   document.querySelectorAll('[data-d]').forEach(b => b.onclick = () => { currentRange = +b.dataset.d; document.querySelectorAll('[data-d]').forEach(x=>x.classList.remove('active')); b.classList.add('active'); loadData(); });
-  document.querySelectorAll('[name=dim]').forEach(r => r.onchange = () => { currentDimension = r.value; loadData(); });
+  document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); loadData(); });
+  document.querySelectorAll('.dim').forEach(b => b.onclick = () => { currentDimension = b.dataset.dim; document.querySelectorAll('.dim').forEach(x=>x.classList.remove('active')); b.classList.add('active'); loadData(); });
   loadData();
 }
 
@@ -72,53 +55,92 @@ function fmtNum(n) { if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return
 
 async function loadData() {
   const end = new Date(); const start = new Date(); start.setDate(start.getDate() - currentRange);
-  const s = start.toISOString().slice(0,10), e = end.toISOString().slice(0,10);
+  const fmt = d => d.toISOString().slice(0,10);
   try {
-    const data = await api(`/usage?start=${s}&end=${e}`);
+    const r = await fetch(`/usage?start=${fmt(start)}&end=${fmt(end)}`);
+    const data = await r.json();
+    if (data.error) { console.error(data.error); return; }
     renderCards(data); renderChart(data);
   } catch(e) { console.error(e); }
 }
 
 function renderCards(data) {
   const totalReqs = data.reduce((a,d) => a + d.request_count, 0);
-  const totalTokens = data.reduce((a,d) => a + d.tokens_total, 0);
+  const totalIn = data.reduce((a,d) => a + d.tokens_in, 0);
   const totalCached = data.reduce((a,d) => a + d.tokens_cached, 0);
-  const totalIn = data.reduce((a,d) => a + d.tokens_in + d.tokens_cached, 0);
-  const cacheRate = totalIn > 0 ? (totalCached / totalIn * 100).toFixed(1) : '0.0';
+  const totalOut = data.reduce((a,d) => a + d.tokens_out, 0);
+  const totalAll = totalIn + totalCached + totalOut;
+  const cacheRate = (totalIn + totalCached) > 0 ? (totalCached / (totalIn + totalCached) * 100).toFixed(1) : '0.0';
   document.getElementById('cards').innerHTML = `
-    <div class="card"><div class="label">Total Requests</div><div class="value">${fmtNum(totalReqs)}</div></div>
-    <div class="card"><div class="label">Total Tokens</div><div class="value">${fmtNum(totalTokens)}</div></div>
-    <div class="card"><div class="label">Cache Hit Rate</div><div class="value">${cacheRate}%</div></div>`;
+    <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReqs)}</div></div>
+    <div class="card"><div class="label">Input Tokens</div><div class="value">${fmtNum(totalIn)}</div></div>
+    <div class="card"><div class="label">Cached Tokens</div><div class="value">${fmtNum(totalCached)}</div></div>
+    <div class="card"><div class="label">Output Tokens</div><div class="value">${fmtNum(totalOut)}</div></div>
+    <div class="card"><div class="label">Cache Rate</div><div class="value">${cacheRate}%</div></div>`;
+}
+
+function aggrKey(dateStr) {
+  if (currentAggr === 'day') return dateStr;
+  const d = new Date(dateStr + 'T00:00:00');
+  if (currentAggr === 'week') {
+    // ISO week: Monday-based
+    const tmp = new Date(d);
+    tmp.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return tmp.toISOString().slice(0,10);
+  }
+  // month
+  return dateStr.slice(0,7);
 }
 
 function renderChart(data) {
-  // Group by date and dimension
-  const dim = currentDimension;
-  const byDate = {};
+  const byBucket = {};
   const dims = new Set();
   data.forEach(d => {
-    const k = dim === 'model' ? d.model : (d.username || d.account_id);
+    const bucket = aggrKey(d.date);
+    let k;
+    if (currentDimension === 'model') k = d.model;
+    else if (currentDimension === 'account') k = d.username || d.account_id;
+    else k = 'total';
     dims.add(k);
-    if (!byDate[d.date]) byDate[d.date] = {};
-    if (!byDate[d.date][k]) byDate[d.date][k] = { cached: 0, noncached: 0 };
-    byDate[d.date][k].cached += d.tokens_cached;
-    byDate[d.date][k].noncached += d.tokens_total - d.tokens_cached;
+    if (!byBucket[bucket]) byBucket[bucket] = {};
+    if (!byBucket[bucket][k]) byBucket[bucket][k] = { cached: 0, noncached: 0 };
+    byBucket[bucket][k].cached += d.tokens_cached;
+    byBucket[bucket][k].noncached += d.tokens_in + d.tokens_out; // non-cached = input + output (excluding cache)
   });
-  const dates = Object.keys(byDate).sort();
+  const buckets = Object.keys(byBucket).sort();
   const colors = ['#0ea5e9','#7c3aed','#f59e0b','#10b981','#ef4444','#ec4899','#6366f1','#14b8a6'];
   const datasets = [];
   let ci = 0;
   [...dims].sort().forEach(dim => {
     const color = colors[ci % colors.length];
-    datasets.push({ label: dim + ' (cached)', data: dates.map(d => (byDate[d]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: 'stack' });
-    datasets.push({ label: dim + ' (non-cached)', data: dates.map(d => (byDate[d]?.[dim]?.noncached || 0)), backgroundColor: color, stack: 'stack' });
+    // cached (lighter) on bottom, non-cached (solid) on top
+    datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '66', stack: 'stack' });
+    datasets.push({ label: dim + ' (non-cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: 'stack' });
     ci++;
   });
   if (chart) chart.destroy();
-  chart = new Chart(document.getElementById('chart'), { type: 'bar', data: { labels: dates, datasets }, options: { responsive: true, plugins: { legend: { labels: { color: '#e0e0e0' } } }, scales: { x: { stacked: true, ticks: { color: '#888' } }, y: { stacked: true, ticks: { color: '#888' } } } } });
+  chart = new Chart(document.getElementById('chart'), {
+    type: 'bar',
+    data: { labels: buckets, datasets },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: '#e0e0e0' } },
+        tooltip: {
+          callbacks: {
+            label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}`
+          }
+        }
+      },
+      scales: {
+        x: { stacked: true, ticks: { color: '#888' } },
+        y: { stacked: true, ticks: { color: '#888', callback: v => fmtNum(v) } }
+      }
+    }
+  });
 }
 
-if (getKey()) showDashboard(); else showAuth();
+showDashboard();
 </script>
 </body>
 </html>
