@@ -165,9 +165,12 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 	if targetEndpoint == endpoint {
 		if streaming {
 			if err := h.HandleStreamingRequest(w, r, endpoint, usage); err != nil {
-				upstream.LogRequestError("streaming request failed", err, "endpoint", endpoint)
 				var hse *headersSentError
-				if !errors.As(err, &hse) {
+				if errors.As(err, &hse) {
+					// Client disconnected mid-stream — expected, not an error
+					slog.Debug("streaming request failed", "error", err, "endpoint", endpoint)
+				} else {
+					upstream.LogRequestError("streaming request failed", err, "endpoint", endpoint)
 					WriteOpenAIError(w, http.StatusBadGateway, OpenAIErrorTypeServerError, "upstream request failed")
 				}
 			}
@@ -187,7 +190,11 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 		}
 
 		// Extract usage from non-streaming response
-		extractUsageFromChatResponse(respData, usage)
+		if endpoint == "/responses" {
+			extractUsageFromResponsesResponse(respData, usage)
+		} else {
+			extractUsageFromChatResponse(respData, usage)
+		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Write(respData)
@@ -280,6 +287,23 @@ func extractUsageFromChatResponse(data []byte, usage *proxyTokenUsage) {
 	usage.Total = resp.Usage.TotalTokens
 	if resp.Usage.PromptTokensDetails != nil {
 		usage.Cached = resp.Usage.PromptTokensDetails.CachedTokens
+	}
+}
+
+// extractUsageFromResponsesResponse parses usage fields from an OpenAI Responses API JSON response.
+func extractUsageFromResponsesResponse(data []byte, usage *proxyTokenUsage) {
+	if usage == nil {
+		return
+	}
+	var resp types.ResponsesResult
+	if err := json.Unmarshal(data, &resp); err != nil || resp.Usage == nil {
+		return
+	}
+	usage.In = resp.Usage.InputTokens
+	usage.Out = resp.Usage.OutputTokens
+	usage.Total = resp.Usage.InputTokens + resp.Usage.OutputTokens
+	if resp.Usage.InputTokensDetails != nil {
+		usage.Cached = resp.Usage.InputTokensDetails.CachedTokens
 	}
 }
 

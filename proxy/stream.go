@@ -118,6 +118,29 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 			}
 		}
 
+		// Parse usage from Responses API streaming events (response.completed carries usage)
+		if isResponses && usage != nil && strings.HasPrefix(line, "data: ") {
+			dataStr := strings.TrimPrefix(line, "data: ")
+			if dataStr != "[DONE]" {
+				var event struct {
+					Type     string `json:"type"`
+					Response *struct {
+						Usage *types.ResponsesUsage `json:"usage,omitempty"`
+					} `json:"response,omitempty"`
+				}
+				if err := json.Unmarshal([]byte(dataStr), &event); err == nil &&
+					event.Response != nil && event.Response.Usage != nil {
+					u := event.Response.Usage
+					usage.In = u.InputTokens
+					usage.Out = u.OutputTokens
+					usage.Total = u.InputTokens + u.OutputTokens
+					if u.InputTokensDetails != nil {
+						usage.Cached = u.InputTokensDetails.CachedTokens
+					}
+				}
+			}
+		}
+
 		// Responses API termination events
 		if isResponses && isResponsesTerminationEvent(line) {
 			slog.Debug("stream termination event", "endpoint", endpoint, "event", strings.TrimSpace(line))
