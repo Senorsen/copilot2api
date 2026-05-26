@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Docs
+
+- Add `requires_openai_auth = false` to Codex config example in README
+
 ## [0.3.1] - 2026-04-26
 
 ### Bug Fixes

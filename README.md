@@ -304,6 +304,7 @@ model = "gpt-5.3-codex"
 model_provider = "copilot2api"
 model_reasoning_effort = "high"
 web_search = "disabled"
+requires_openai_auth = false
 
 [model_providers.copilot2api]
 name = "copilot2api"
