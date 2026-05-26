@@ -153,6 +153,28 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 				if _, err := io.WriteString(w, "\n"); err != nil {
 					return err
 				}
+				// Parse usage from the termination event's data line
+				if usage != nil && strings.HasPrefix(remaining, "data: ") {
+					dataStr := strings.TrimPrefix(remaining, "data: ")
+					if dataStr != "[DONE]" {
+						var event struct {
+							Type     string `json:"type"`
+							Response *struct {
+								Usage *types.ResponsesUsage `json:"usage,omitempty"`
+							} `json:"response,omitempty"`
+						}
+						if err := json.Unmarshal([]byte(dataStr), &event); err == nil &&
+							event.Response != nil && event.Response.Usage != nil {
+							u := event.Response.Usage
+							usage.In = u.InputTokens
+							usage.Out = u.OutputTokens
+							usage.Total = u.InputTokens + u.OutputTokens
+							if u.InputTokensDetails != nil {
+								usage.Cached = u.InputTokensDetails.CachedTokens
+							}
+						}
+					}
+				}
 				if remaining == "" {
 					break
 				}
