@@ -204,35 +204,55 @@ function renderChart(data) {
     afterDraw(chart) {
       const { ctx } = chart;
       ctx.save();
-      // top labels: vertical text above each bar
-      stackIds.forEach((stk, si) => {
+      ctx.textAlign = 'center';
+      // top labels: horizontal, two lines
+      stackIds.forEach(stk => {
         const stkDatasets = chart.data.datasets.map((ds, i) => ({ ds, i })).filter(x => x.ds.stack === stk);
         if (!stkDatasets.length) return;
         const topDsIdx = stkDatasets[stkDatasets.length - 1].i;
         const meta = chart.getDatasetMeta(topDsIdx);
         if (meta.hidden) return;
-        // dimension short name
-        const dimName = stkDatasets[0].ds.label.replace(/\s*\(.*\)$/, '');
-        const short = dimName === 'total' ? '' : dimName.replace(/^claude-/, 'c-').replace(/^gpt-/, 'g-');
         meta.data.forEach((bar, bi) => {
           const info = stackTotals[stk]?.[bi];
           if (!info || info.total === 0) return;
           const x = bar.x;
-          const y = bar.y;
-          // draw total + cached info vertically
-          ctx.save();
-          ctx.translate(x, y - 6);
-          ctx.rotate(-Math.PI / 2);
-          ctx.textAlign = 'left';
-          ctx.font = 'bold 10px -apple-system, sans-serif';
+          let y = bar.y - 4;
+          // line 1: total
+          ctx.font = 'bold 9px -apple-system, sans-serif';
           ctx.fillStyle = '#e0e0e0';
-          let label = fmtNum(info.total);
+          ctx.fillText(fmtNum(info.total), x, y);
+          // line 2: cached breakdown
           if (info.cached > 0) {
+            y -= 11;
             const pct = (info.cached / info.total * 100).toFixed(0);
-            label += `  C:${fmtNum(info.cached)}(${pct}%)`;
+            ctx.font = '8px -apple-system, sans-serif';
+            ctx.fillStyle = '#888';
+            ctx.fillText(`C:${fmtNum(info.cached)}(${pct}%)`, x, y);
           }
-          if (short) label += `  [${short}]`;
-          ctx.fillText(label, 0, 0);
+        });
+      });
+      // bottom labels: dimension name at 45° with enough room
+      stackIds.forEach(stk => {
+        const stkDatasets = chart.data.datasets.map((ds, i) => ({ ds, i })).filter(x => x.ds.stack === stk);
+        if (!stkDatasets.length) return;
+        const bottomDsIdx = stkDatasets[0].i;
+        const meta = chart.getDatasetMeta(bottomDsIdx);
+        if (meta.hidden) return;
+        const dimName = stkDatasets[0].ds.label.replace(/\s*\(.*\)$/, '');
+        if (dimName === 'total') return;
+        const short = dimName.replace(/^claude-/, 'c-').replace(/^gpt-/, 'g-');
+        meta.data.forEach((bar, bi) => {
+          const info = stackTotals[stk]?.[bi];
+          if (!info || info.total === 0) return;
+          const yAxis = chart.scales.y;
+          const bottomY = yAxis.getPixelForValue(0);
+          ctx.save();
+          ctx.translate(bar.x, bottomY + 6);
+          ctx.rotate(Math.PI / 6);
+          ctx.textAlign = 'left';
+          ctx.font = '9px -apple-system, sans-serif';
+          ctx.fillStyle = '#aaa';
+          ctx.fillText(short, 0, 0);
           ctx.restore();
         });
       });
@@ -246,7 +266,7 @@ function renderChart(data) {
     data: { labels: buckets, datasets },
     options: {
       responsive: true,
-      layout: { padding: { top: 120 } },
+      layout: { padding: { top: 25, bottom: 60 } },
       plugins: {
         legend: { labels: { color: '#e0e0e0', font: { size: 11 } } },
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}` } }
