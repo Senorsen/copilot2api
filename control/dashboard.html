@@ -31,6 +31,9 @@ canvas { width: 100% !important; }
 .token-bar .status { font-size: 0.75rem; }
 .token-bar .status.ok { color: var(--accent3); }
 .token-bar .status.err { color: #ef4444; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn.loading { pointer-events: none; opacity: 0.7; }
+.btn.loading::after { content: ''; display: inline-block; width: 10px; height: 10px; border: 2px solid #888; border-top-color: #e0e0e0; border-radius: 50%; animation: spin 0.6s linear infinite; margin-left: 4px; vertical-align: middle; }
 </style>
 </head>
 <body>
@@ -42,7 +45,7 @@ let currentRange = 30, currentAggr = 'day', currentDims = { model: true, account
 let filterModel = '', filterAccount = '';
 let rawData = [];
 
-function showDashboard() {
+async function showDashboard() {
   app.innerHTML = `<h1>📊 copilot2api Usage</h1>
 <div class="token-bar">
   <span class="lbl">API Key:</span>
@@ -79,18 +82,21 @@ function showDashboard() {
 <div class="cards" id="cards"></div>
 <div class="chart-container"><canvas id="chart"></canvas></div>`;
 
-  // populate month/quarter pickers
+  // populate month/quarter pickers FIRST, then attach handlers
   const now = new Date();
   const pmEl = document.getElementById('pickMonth'), pqEl = document.getElementById('pickQuarter');
+  let pmOpts = '', pqOpts = '';
   for (let y = now.getFullYear(); y >= 2025; y--) {
     const mEnd = y === now.getFullYear() ? now.getMonth() + 1 : 12;
     for (let m = mEnd; m >= 1; m--) {
-      pmEl.innerHTML += `<option value="${y}-${String(m).padStart(2,'0')}">${y}-${String(m).padStart(2,'0')}</option>`;
+      pmOpts += `<option value="${y}-${String(m).padStart(2,'0')}">${y}-${String(m).padStart(2,'0')}</option>`;
     }
     for (let q = (y === now.getFullYear() ? Math.ceil((now.getMonth()+1)/3) : 4); q >= 1; q--) {
-      pqEl.innerHTML += `<option value="${y}-Q${q}">${y} Q${q}</option>`;
+      pqOpts += `<option value="${y}-Q${q}">${y} Q${q}</option>`;
     }
   }
+  pmEl.innerHTML += pmOpts;
+  pqEl.innerHTML += pqOpts;
 
   function clearRangeActive() { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pmEl.value=''; pqEl.value=''; }
 
@@ -135,9 +141,14 @@ function showDashboard() {
     };
   });
   setupAutoRefresh(+savedAR);
-  document.getElementById('btnRefresh').onclick = () => fetchData();
+  document.getElementById('btnRefresh').onclick = async () => {
+    const btn = document.getElementById('btnRefresh');
+    btn.classList.add('loading');
+    await fetchData();
+    btn.classList.remove('loading');
+  };
 
-  fetchPricing();
+  await fetchPricing();
   fetchData();
 }
 
@@ -173,28 +184,28 @@ async function fetchPricing() {
 
 function getPrice(model) {
   if (!pricingLoaded) return null;
-  // Exact match
-  if (PRICING[model]) return PRICING[model];
-  // With provider prefix
-  for (const pfx of ['anthropic/', 'openai/']) {
-    if (PRICING[pfx + model]) return PRICING[pfx + model];
-  }
-  // Normalize dots to hyphens
+  // Normalize: claude-opus-4.6 -> claude-opus-4-6
   const norm = model.replace(/\./g, '-');
-  if (PRICING[norm]) return PRICING[norm];
-  for (const pfx of ['anthropic/', 'openai/']) {
-    if (PRICING[pfx + norm]) return PRICING[pfx + norm];
+  // Try candidates with various key formats used by LiteLLM
+  const candidates = [model, norm];
+  for (const m of [model, norm]) {
+    candidates.push('anthropic/' + m, 'openai/' + m);
   }
   // Strip -1m suffix
   if (model.endsWith('-1m')) {
     const base = model.slice(0, -3);
-    const r = getPrice(base);
-    if (r) return r;
+    const baseNorm = base.replace(/\./g, '-');
+    candidates.push(base, baseNorm, 'anthropic/' + base, 'anthropic/' + baseNorm);
   }
-  // Prefix match
-  for (const key of Object.keys(PRICING)) {
-    const bare = key.replace(/^(anthropic|openai)\//, '');
-    if (bare.startsWith(norm) || norm.startsWith(bare)) return PRICING[key];
+  // Exact match on candidates
+  for (const c of candidates) {
+    if (PRICING[c]) return PRICING[c];
+  }
+  // Prefix match: find a key that starts with any candidate (handles date suffixes like -20250219)
+  for (const c of candidates) {
+    for (const key of Object.keys(PRICING)) {
+      if (key === c || key.startsWith(c + '-') || key.startsWith(c + '/')) return PRICING[key];
+    }
   }
   return null;
 }
@@ -456,9 +467,9 @@ function renderChart(data) {
     options: {
       responsive: true,
       animation: false,
-      layout: { padding: { top: 55, bottom: 60 } },
+      layout: { padding: { top: 75, bottom: 60 } },
       plugins: {
-        legend: { labels: { color: '#e0e0e0', font: { size: 11 }, padding: 20 }, padding: 30 },
+        legend: { labels: { color: '#e0e0e0', font: { size: 11 }, padding: 15 } },
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}` } }
       },
       scales: {
