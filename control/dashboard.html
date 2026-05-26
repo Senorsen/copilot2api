@@ -104,8 +104,8 @@ async function showDashboard() {
     clearRangeActive(); b.classList.add('active');
     currentRange = b.dataset.d; fetchData();
   });
-  pmEl.onchange = () => { if(pmEl.value) { clearRangeActive(); pqEl.value=''; currentRange = 'pick:'+pmEl.value; fetchData(); } };
-  pqEl.onchange = () => { if(pqEl.value) { clearRangeActive(); pmEl.value=''; currentRange = 'pick:'+pqEl.value; fetchData(); } };
+  pmEl.onchange = () => { const v = pmEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pqEl.value=''; currentRange = 'pick:'+v; fetchData(); } };
+  pqEl.onchange = () => { const v = pqEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pmEl.value=''; currentRange = 'pick:'+v; fetchData(); } };
   document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); render(); });
   document.querySelectorAll('.tv').forEach(b => b.onclick = () => { currentTokenView = b.dataset.tv; document.querySelectorAll('.tv').forEach(x=>x.classList.remove('active3')); b.classList.add('active3'); render(); });
   document.querySelectorAll('.dim').forEach(b => b.onclick = () => {
@@ -218,29 +218,35 @@ async function fetchData() {
   const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   let start, end;
   const now = new Date();
-  if (currentRange === 'month') {
+  const cr = String(currentRange);
+  if (cr === 'month') {
     start = new Date(now.getFullYear(), now.getMonth(), 1);
     end = now;
-  } else if (currentRange === 'quarter') {
+  } else if (cr === 'quarter') {
     const q = Math.floor(now.getMonth() / 3);
     start = new Date(now.getFullYear(), q * 3, 1);
     end = now;
-  } else if (typeof currentRange === 'string' && currentRange.startsWith('pick:')) {
-    const val = currentRange.slice(5);
+  } else if (cr.startsWith('pick:')) {
+    const val = cr.slice(5);
     if (val.includes('Q')) {
       const [y, qStr] = val.split('-Q');
       const qi = parseInt(qStr) - 1;
       start = new Date(parseInt(y), qi * 3, 1);
       end = new Date(parseInt(y), qi * 3 + 3, 0);
     } else {
-      const [y, m] = val.split('-').map(Number);
+      const parts = val.split('-');
+      const y = parseInt(parts[0]), m = parseInt(parts[1]);
+      if (isNaN(y) || isNaN(m)) { console.error('Invalid pick value:', val); return; }
       start = new Date(y, m - 1, 1);
       end = new Date(y, m, 0);
     }
     if (end > now) end = now;
   } else {
-    end = now; start = new Date(); start.setDate(start.getDate() - (+currentRange));
+    const days = parseInt(cr, 10);
+    if (isNaN(days)) { console.error('Invalid range:', cr); return; }
+    end = now; start = new Date(); start.setDate(start.getDate() - days);
   }
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) { console.error('Invalid date range:', start, end, 'range:', cr); return; }
   const token = document.getElementById('apiToken').value;
   const status = document.getElementById('tokenStatus');
   if (!token) { status.className = 'status err'; status.textContent = '⚠ Token required'; return; }
