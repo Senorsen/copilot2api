@@ -270,7 +270,7 @@ function renderChart(data) {
           if (info.cached > 0) {
             const pct = (info.cached / info.total * 100).toFixed(0);
             ctx.font = '10px -apple-system, sans-serif';
-            ctx.fillStyle = '#888';
+            ctx.fillStyle = '#e0e0e0';
             ctx.fillText(`C:${fmtNum(info.cached)}(${pct}%)`, x, y);
             y -= 13;
           }
