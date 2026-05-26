@@ -171,16 +171,17 @@ function renderChart(data) {
   let ci = 0;
   const tv = currentTokenView;
   [...dims].sort().forEach(dim => {
+    const displayDim = dim.replace(/^claude-/, '').replace(/-internal$/, '');
     const color = colors[ci % colors.length];
-    const stk = 'stk_' + ci; // each dimension gets its own stack = grouped bars
+    const stk = 'stk_' + ci;
     if (tv === 'input') {
-      datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
-      datasets.push({ label: dim + ' (input)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: stk });
+      datasets.push({ label: displayDim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
+      datasets.push({ label: displayDim + ' (input)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: stk });
     } else if (tv === 'output') {
-      datasets.push({ label: dim + ' (output)', data: buckets.map(b => (byBucket[b]?.[dim]?.output || 0)), backgroundColor: color, stack: stk });
+      datasets.push({ label: displayDim + ' (output)', data: buckets.map(b => (byBucket[b]?.[dim]?.output || 0)), backgroundColor: color, stack: stk });
     } else {
-      datasets.push({ label: dim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
-      datasets.push({ label: dim + ' (non-cached)', data: buckets.map(b => ((byBucket[b]?.[dim]?.noncached || 0) + (byBucket[b]?.[dim]?.output || 0))), backgroundColor: color, stack: stk });
+      datasets.push({ label: displayDim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
+      datasets.push({ label: displayDim + ' (non-cached)', data: buckets.map(b => ((byBucket[b]?.[dim]?.noncached || 0) + (byBucket[b]?.[dim]?.output || 0))), backgroundColor: color, stack: stk });
     }
     ci++;
   });
@@ -240,7 +241,7 @@ function renderChart(data) {
         if (meta.hidden) return;
         const dimName = stkDatasets[0].ds.label.replace(/\s*\(.*\)$/, '');
         if (dimName === 'total') return;
-        const short = dimName.replace(/^claude-/, 'c-').replace(/^gpt-/, 'g-');
+        const short = dimName.replace(/^claude-/, '').replace(/-internal$/, '');
         meta.data.forEach((bar, bi) => {
           const info = stackTotals[stk]?.[bi];
           if (!info || info.total === 0) return;
@@ -248,7 +249,7 @@ function renderChart(data) {
           const bottomY = yAxis.getPixelForValue(0);
           ctx.save();
           ctx.translate(bar.x, bottomY + 6);
-          ctx.rotate(Math.PI / 6);
+          ctx.rotate(Math.PI / 3);
           ctx.textAlign = 'left';
           ctx.font = '9px -apple-system, sans-serif';
           ctx.fillStyle = '#aaa';
