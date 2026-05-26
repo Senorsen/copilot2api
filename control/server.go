@@ -76,6 +76,11 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip auth for dashboard and usage endpoints (protected by ingress client cert)
+		if strings.HasPrefix(r.URL.Path, "/dashboard") || strings.HasPrefix(r.URL.Path, "/usage") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if s.adminToken == "" {
 			next.ServeHTTP(w, r)
 			return
