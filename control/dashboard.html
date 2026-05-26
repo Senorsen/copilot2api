@@ -53,6 +53,10 @@ function showDashboard() {
 <div class="controls">
   <span class="lbl">Range:</span>
   <button class="btn range" data-d="7">7d</button><button class="btn range active" data-d="30">30d</button><button class="btn range" data-d="90">90d</button><button class="btn range" data-d="180">180d</button><button class="btn range" data-d="365">1y</button>
+  <button class="btn range" data-d="month">This Month</button><button class="btn range" data-d="quarter">This Q</button>
+  <div class="sep"></div>
+  <select id="pickMonth"><option value="">Month…</option></select>
+  <select id="pickQuarter"><option value="">Quarter…</option></select>
   <div class="sep"></div>
   <span class="lbl">Group:</span>
   <button class="btn aggr active2" data-a="day">Day</button><button class="btn aggr" data-a="week">Week</button><button class="btn aggr" data-a="month">Month</button>
@@ -71,7 +75,27 @@ function showDashboard() {
 <div class="cards" id="cards"></div>
 <div class="chart-container"><canvas id="chart"></canvas></div>`;
 
-  document.querySelectorAll('.range').forEach(b => b.onclick = () => { currentRange = +b.dataset.d; document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); b.classList.add('active'); fetchData(); });
+  // populate month/quarter pickers
+  const now = new Date();
+  const pmEl = document.getElementById('pickMonth'), pqEl = document.getElementById('pickQuarter');
+  for (let y = now.getFullYear(); y >= 2025; y--) {
+    const mEnd = y === now.getFullYear() ? now.getMonth() + 1 : 12;
+    for (let m = mEnd; m >= 1; m--) {
+      pmEl.innerHTML += `<option value="${y}-${String(m).padStart(2,'0')}">${y}-${String(m).padStart(2,'0')}</option>`;
+    }
+    for (let q = (y === now.getFullYear() ? Math.ceil((now.getMonth()+1)/3) : 4); q >= 1; q--) {
+      pqEl.innerHTML += `<option value="${y}-Q${q}">${y} Q${q}</option>`;
+    }
+  }
+
+  function clearRangeActive() { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pmEl.value=''; pqEl.value=''; }
+
+  document.querySelectorAll('.range').forEach(b => b.onclick = () => {
+    clearRangeActive(); b.classList.add('active');
+    currentRange = b.dataset.d; fetchData();
+  });
+  pmEl.onchange = () => { if(pmEl.value) { clearRangeActive(); pqEl.value=''; currentRange = 'pick:'+pmEl.value; fetchData(); } };
+  pqEl.onchange = () => { if(pqEl.value) { clearRangeActive(); pmEl.value=''; currentRange = 'pick:'+pqEl.value; fetchData(); } };
   document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); render(); });
   document.querySelectorAll('.tv').forEach(b => b.onclick = () => { currentTokenView = b.dataset.tv; document.querySelectorAll('.tv').forEach(x=>x.classList.remove('active3')); b.classList.add('active3'); render(); });
   document.querySelectorAll('.dim').forEach(b => b.onclick = () => {
@@ -117,8 +141,32 @@ function fmtUSD(n) { if(n>=1000) return '$'+(n/1000).toFixed(1)+'K'; if(n>=1) re
 function fmtNum(n) { if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
 
 async function fetchData() {
-  const end = new Date(); const start = new Date(); start.setDate(start.getDate() - currentRange);
   const fmt = d => d.toISOString().slice(0,10);
+  let start, end;
+  const now = new Date();
+  if (currentRange === 'month') {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = now;
+  } else if (currentRange === 'quarter') {
+    const q = Math.floor(now.getMonth() / 3);
+    start = new Date(now.getFullYear(), q * 3, 1);
+    end = now;
+  } else if (typeof currentRange === 'string' && currentRange.startsWith('pick:')) {
+    const val = currentRange.slice(5);
+    if (val.includes('Q')) {
+      const [y, qStr] = val.split('-Q');
+      const qi = parseInt(qStr) - 1;
+      start = new Date(parseInt(y), qi * 3, 1);
+      end = new Date(parseInt(y), qi * 3 + 3, 0);
+    } else {
+      const [y, m] = val.split('-').map(Number);
+      start = new Date(y, m - 1, 1);
+      end = new Date(y, m, 0);
+    }
+    if (end > now) end = now;
+  } else {
+    end = now; start = new Date(); start.setDate(start.getDate() - (+currentRange));
+  }
   const token = document.getElementById('apiToken').value;
   const status = document.getElementById('tokenStatus');
   if (!token) { status.className = 'status err'; status.textContent = '⚠ Token required'; return; }
