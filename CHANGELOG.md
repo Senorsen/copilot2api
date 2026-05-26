@@ -5,9 +5,13 @@
 ### Features
 
 - Add usage statistics system: records token usage per request to JSONL files (`stats/` package)
-- Add control plane endpoints: `GET /usage` (query aggregated stats), `GET /usage/accounts` (list accounts with data), `GET /dashboard` (HTML dashboard)
-- Add interactive HTML dashboard with Chart.js stacked bar charts, time range selectors, and cache hit rate cards
-- Stats directory configurable via `COPILOT2API_STATS_DIR` env var (default: `./stats`)
+- Add control plane endpoints: `GET /usage` (query aggregated stats), `GET /usage/accounts` (list accounts with data), `GET /dashboard` (HTML dashboard), `GET /usage/pricing` (LiteLLM pricing data)
+- Add interactive HTML dashboard with Chart.js stacked bar charts, time range selectors, cache hit rate cards, estimated cost, and auto-refresh
+- Stats opt-in via `COPILOT2API_STATS_ENABLED=true` env var (default: disabled). When disabled, stats recording, dashboard, and usage endpoints are inactive
+- Stats directory configurable via `COPILOT2API_STATS_DIR` env var (default: `~/.config/copilot2api/stats`)
+- Dynamic model pricing: fetches LiteLLM pricing JSON on startup and daily at 3:00 AM UTC, cached to disk. Supports fuzzy model name matching (provider prefixes, version normalization, suffix stripping)
+- Dashboard: multi-select dimensions (By Model + By Account), month/quarter range pickers, manual refresh button, configurable auto-refresh (off/1m/2m/5m/30m/1h) stored in localStorage
+- Dashboard: API key required for usage data (stored in localStorage), bar top labels with overlap avoidance, bottom dimension labels at 60°
 
 ### Docs
 

@@ -32,11 +32,12 @@ func generateUUID() string {
 
 // Server is the control plane HTTP server (port 7778).
 type Server struct {
-	am         *auth.AccountManager
-	adminToken string
-	statsDir   string
-	mu         sync.Mutex
-	flows      map[string]*pendingFlow
+	am           *auth.AccountManager
+	adminToken   string
+	statsDir     string
+	pricingCache *stats.PricingCache
+	mu           sync.Mutex
+	flows        map[string]*pendingFlow
 }
 
 type pendingFlow struct {
@@ -53,12 +54,13 @@ type pendingFlow struct {
 	cancel          context.CancelFunc
 }
 
-func NewServer(am *auth.AccountManager, adminToken string, statsDir string) *Server {
+func NewServer(am *auth.AccountManager, adminToken string, statsDir string, pricingCache *stats.PricingCache) *Server {
 	return &Server{
-		am:         am,
-		adminToken: adminToken,
-		statsDir:   statsDir,
-		flows:      make(map[string]*pendingFlow),
+		am:           am,
+		adminToken:   adminToken,
+		statsDir:     statsDir,
+		pricingCache: pricingCache,
+		flows:        make(map[string]*pendingFlow),
 	}
 }
 
@@ -69,6 +71,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/accounts/", http.HandlerFunc(s.handleAccountRoute))
 	mux.HandleFunc("/usage", s.handleUsageQuery)
 	mux.HandleFunc("/usage/accounts", s.handleUsageAccounts)
+	mux.HandleFunc("/usage/pricing", s.handleUsagePricing)
 	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/dashboard/", s.handleDashboard)
 	return s.authMiddleware(mux)
@@ -357,6 +360,24 @@ func (s *Server) handleUsageAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, accounts)
+}
+
+func (s *Server) handleUsagePricing(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+	if s.pricingCache == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pricing not available"})
+		return
+	}
+	data, err := s.pricingCache.GetRawJSON()
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "pricing cache not found"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(data)
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {

@@ -192,13 +192,27 @@ func main() {
 		return upstream.NewClient(tp, transport)
 	}, 5*time.Minute)
 
-	// Stats recorder
+	// Stats recorder (opt-in via COPILOT2API_STATS_ENABLED)
+	statsEnabled := false
+	if v := os.Getenv("COPILOT2API_STATS_ENABLED"); v == "true" || v == "1" {
+		statsEnabled = true
+	}
 	statsDir := os.Getenv("COPILOT2API_STATS_DIR")
 	if statsDir == "" {
-		statsDir = "./stats"
+		homeDir, _ := os.UserHomeDir()
+		statsDir = filepath.Join(homeDir, ".config", "copilot2api", "stats")
 	}
-	recorder := stats.NewRecorder(statsDir)
-	defer recorder.Close()
+	var recorder *stats.Recorder
+	var pricingCache *stats.PricingCache
+	if statsEnabled {
+		recorder = stats.NewRecorder(statsDir)
+		defer recorder.Close()
+		pricingCache = stats.NewPricingCache(statsDir)
+		defer pricingCache.Close()
+		slog.Info("stats enabled", "dir", statsDir)
+	} else {
+		slog.Info("stats disabled (set COPILOT2API_STATS_ENABLED=true to enable)")
+	}
 
 	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()
@@ -244,7 +258,7 @@ func main() {
 
 	// Create control plane server
 	adminToken := os.Getenv("ADMIN_TOKEN")
-	controlServer := control.NewServer(accountManager, adminToken, statsDir)
+	controlServer := control.NewServer(accountManager, adminToken, statsDir, pricingCache)
 	controlHTTP := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", *host, *controlPort),
 		ReadHeaderTimeout: 10 * time.Second,

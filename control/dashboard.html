@@ -49,6 +49,16 @@ function showDashboard() {
   <input type="password" id="apiToken" placeholder="Enter control plane admin token" value="${localStorage.getItem('c2a_token') || ''}">
   <button class="btn" onclick="document.getElementById('apiToken').type = document.getElementById('apiToken').type === 'password' ? 'text' : 'password'">👁</button>
   <span class="status" id="tokenStatus"></span>
+  <div class="sep"></div>
+  <button class="btn" id="btnRefresh">🔄 Refresh</button>
+  <select id="autoRefresh">
+    <option value="0">Auto: Off</option>
+    <option value="60">1min</option>
+    <option value="120">2min</option>
+    <option value="300">5min</option>
+    <option value="1800">30min</option>
+    <option value="3600">1h</option>
+  </select>
 </div>
 <div class="controls">
   <span class="lbl">Range:</span>
@@ -117,25 +127,78 @@ function showDashboard() {
   });
   document.getElementById('fModel').onchange = e => { filterModel = e.target.value; render(); };
   document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; render(); };
-  document.getElementById('apiToken').onchange = e => { localStorage.setItem('c2a_token', e.target.value); fetchData(); };
+  document.getElementById('apiToken').onchange = e => { localStorage.setItem('c2a_token', e.target.value); fetchPricing(); fetchData(); };
+
+  // Auto-refresh
+  const arEl = document.getElementById('autoRefresh');
+  arEl.value = localStorage.getItem('c2a_autoRefresh') || '300';
+  setupAutoRefresh();
+  arEl.onchange = () => { localStorage.setItem('c2a_autoRefresh', arEl.value); setupAutoRefresh(); };
+  document.getElementById('btnRefresh').onclick = () => fetchData();
+
+  fetchPricing();
   fetchData();
 }
 
-// Pricing per MTok (USD) - 2026 rates
-const PRICING = {
-  'claude-opus-4.7':     { input: 5,  cached: 0.50, output: 25 },
-  'claude-opus-4.6':     { input: 5,  cached: 0.50, output: 25 },
-  'claude-opus-4.6-1m':  { input: 5,  cached: 0.50, output: 25 },
-  'claude-opus-4.5':     { input: 5,  cached: 0.50, output: 25 },
-  'claude-sonnet-4.6':   { input: 3,  cached: 0.30, output: 15 },
-  'claude-sonnet-4.5':   { input: 3,  cached: 0.30, output: 15 },
-  'claude-haiku-4.5':    { input: 1,  cached: 0.10, output: 5 },
-  'claude-haiku-3.5':    { input: 0.80, cached: 0.08, output: 4 },
-  'gpt-5.5':             { input: 5,  cached: 0.50, output: 30 },
-  'gpt-5.4':             { input: 2.5, cached: 0.25, output: 15 },
-  'gpt-4.1':             { input: 2,  cached: 0.20, output: 8 },
-};
-function getPrice(model) { return PRICING[model] || PRICING[Object.keys(PRICING).find(k => model.includes(k))] || null; }
+let autoRefreshTimer = null;
+function setupAutoRefresh() {
+  if (autoRefreshTimer) { clearInterval(autoRefreshTimer); autoRefreshTimer = null; }
+  const secs = parseInt(document.getElementById('autoRefresh').value);
+  if (secs > 0) { autoRefreshTimer = setInterval(fetchData, secs * 1000); }
+}
+
+// Dynamic pricing from LiteLLM via backend
+let PRICING = {};
+let pricingLoaded = false;
+async function fetchPricing() {
+  const token = document.getElementById('apiToken').value;
+  if (!token) return;
+  try {
+    const r = await fetch('/usage/pricing', { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!r.ok) return;
+    const data = await r.json();
+    // Convert LiteLLM format (per-token) to per-MTok for our use
+    PRICING = {};
+    for (const [model, info] of Object.entries(data)) {
+      if (typeof info !== 'object' || !info.input_cost_per_token) continue;
+      PRICING[model] = {
+        input: (info.input_cost_per_token || 0) * 1e6,
+        output: (info.output_cost_per_token || 0) * 1e6,
+        cached: (info.cache_read_input_token_cost || info.input_cost_per_token * 0.1) * 1e6,
+      };
+    }
+    pricingLoaded = true;
+  } catch(e) { console.warn('pricing fetch failed', e); }
+}
+
+function getPrice(model) {
+  if (!pricingLoaded) return null;
+  // Exact match
+  if (PRICING[model]) return PRICING[model];
+  // With provider prefix
+  for (const pfx of ['anthropic/', 'openai/']) {
+    if (PRICING[pfx + model]) return PRICING[pfx + model];
+  }
+  // Normalize dots to hyphens
+  const norm = model.replace(/\./g, '-');
+  if (PRICING[norm]) return PRICING[norm];
+  for (const pfx of ['anthropic/', 'openai/']) {
+    if (PRICING[pfx + norm]) return PRICING[pfx + norm];
+  }
+  // Strip -1m suffix
+  if (model.endsWith('-1m')) {
+    const base = model.slice(0, -3);
+    const r = getPrice(base);
+    if (r) return r;
+  }
+  // Prefix match
+  for (const key of Object.keys(PRICING)) {
+    const bare = key.replace(/^(anthropic|openai)\//, '');
+    if (bare.startsWith(norm) || norm.startsWith(bare)) return PRICING[key];
+  }
+  return null;
+}
+
 function fmtUSD(n) { if(n>=1000) return '$'+(n/1000).toFixed(1)+'K'; if(n>=1) return '$'+n.toFixed(2); return '$'+n.toFixed(4); }
 
 function fmtNum(n) { if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
@@ -302,7 +365,8 @@ function renderChart(data) {
       const { ctx } = chart;
       ctx.save();
       ctx.textAlign = 'center';
-      // top labels: horizontal, two lines
+      // Collect all label positions per bucket to avoid overlap
+      const labelsByBucket = {}; // {bi: [{x, y, lines}]}
       stackIds.forEach(stk => {
         const stkDatasets = chart.data.datasets.map((ds, i) => ({ ds, i })).filter(x => x.ds.stack === stk);
         if (!stkDatasets.length) return;
@@ -312,24 +376,50 @@ function renderChart(data) {
         meta.data.forEach((bar, bi) => {
           const info = stackTotals[stk]?.[bi];
           if (!info || info.total === 0) return;
-          const x = bar.x;
-          let y = bar.y - 4;
-          // line 1: cached breakdown
+          if (!labelsByBucket[bi]) labelsByBucket[bi] = [];
+          let line1 = fmtNum(info.total);
+          if (info.cost > 0) line1 += ', ' + fmtUSD(info.cost);
+          let line2 = null;
           if (info.cached > 0) {
             const pct = (info.cached / info.total * 100).toFixed(0);
-            ctx.font = '10px -apple-system, sans-serif';
-            ctx.fillStyle = '#e0e0e0';
-            ctx.fillText(`C:${fmtNum(info.cached)}(${pct}%)`, x, y);
-            y -= 13;
+            line2 = `C:${fmtNum(info.cached)}(${pct}%)`;
           }
-          // line 2: total, $cost
-          ctx.font = 'bold 10px -apple-system, sans-serif';
-          ctx.fillStyle = '#e0e0e0';
-          let line2 = fmtNum(info.total);
-          if (info.cost > 0) { line2 += ', ' + fmtUSD(info.cost); }
-          ctx.fillText(line2, x, y);
+          labelsByBucket[bi].push({ x: bar.x, baseY: bar.y - 4, line1, line2 });
         });
       });
+      // Draw with overlap avoidance: push labels up if they overlap
+      for (const bi in labelsByBucket) {
+        const labels = labelsByBucket[bi].sort((a, b) => a.x - b.x);
+        // Calculate occupied y ranges and push up if needed
+        let prevBottom = Infinity;
+        for (let i = 0; i < labels.length; i++) {
+          const lbl = labels[i];
+          const height = lbl.line2 ? 26 : 13;
+          let y = lbl.baseY;
+          // If this label's bottom would overlap with prev label's region, push up
+          if (i > 0) {
+            const prev = labels[i-1];
+            const prevX = prev.x, curX = lbl.x;
+            const xDist = Math.abs(curX - prevX);
+            if (xDist < 80) { // labels might overlap horizontally
+              const minY = prev._drawnTop - height - 2;
+              if (y > minY) y = minY;
+            }
+          }
+          // Draw
+          let drawY = y;
+          if (lbl.line2) {
+            ctx.font = '10px -apple-system, sans-serif';
+            ctx.fillStyle = '#e0e0e0';
+            ctx.fillText(lbl.line2, lbl.x, drawY);
+            drawY -= 13;
+          }
+          ctx.font = 'bold 10px -apple-system, sans-serif';
+          ctx.fillStyle = '#e0e0e0';
+          ctx.fillText(lbl.line1, lbl.x, drawY);
+          lbl._drawnTop = drawY - 2;
+        }
+      }
       // bottom labels: dimension name at 45° with enough room
       stackIds.forEach(stk => {
         const stkDatasets = chart.data.datasets.map((ds, i) => ({ ds, i })).filter(x => x.ds.stack === stk);
@@ -365,7 +455,7 @@ function renderChart(data) {
     data: { labels: buckets, datasets },
     options: {
       responsive: true,
-      layout: { padding: { top: 35, bottom: 60 } },
+      layout: { padding: { top: 55, bottom: 60 } },
       plugins: {
         legend: { labels: { color: '#e0e0e0', font: { size: 11 }, padding: 20 } },
         tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtNum(ctx.raw)}` } }
