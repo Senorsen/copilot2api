@@ -252,6 +252,34 @@ GET /usage
 
 Returns quota usage across all registered accounts.
 
+#### Usage Statistics (opt-in)
+
+Enable with `COPILOT2API_STATS_ENABLED=true`. Records per-request token usage to JSONL files.
+
+```
+GET /dashboard
+```
+
+Interactive HTML dashboard with stacked bar charts, estimated costs (via LiteLLM pricing data), time range selectors, model/account filters, and auto-refresh. Requires `ADMIN_TOKEN` entered in the UI (stored in localStorage).
+
+```
+GET /usage?start=YYYY-MM-DD&end=YYYY-MM-DD[&account_id=...][&model=...]
+```
+
+Returns aggregated daily token stats (input, output, cached) per model/account. Requires `ADMIN_TOKEN` via `Authorization: Bearer` header.
+
+```
+GET /usage/accounts
+```
+
+Lists accounts that have usage data. Requires `ADMIN_TOKEN`.
+
+```
+GET /usage/pricing
+```
+
+Returns cached LiteLLM model pricing JSON. Automatically fetched on startup and refreshed daily at 3:00 AM UTC. Requires `ADMIN_TOKEN`.
+
 ---
 
 ## Environment Variables
@@ -266,6 +294,8 @@ Returns quota usage across all registered accounts.
 | `COPILOT2API_PORT` | Data plane port | `7777` |
 | `COPILOT2API_ADMIN_PORT` | Control plane port | `7778` |
 | `COPILOT2API_DEBUG` | Enable debug logging | `false` |
+| `COPILOT2API_STATS_ENABLED` | Enable usage stats recording, dashboard, and pricing | `false` |
+| `COPILOT2API_STATS_DIR` | Stats data directory | `~/.config/copilot2api/stats` |
 
 ---
 
