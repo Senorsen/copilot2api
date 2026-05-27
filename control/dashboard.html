@@ -176,6 +176,7 @@ async function fetchPricing() {
         input: (info.input_cost_per_token || 0) * 1e6,
         output: (info.output_cost_per_token || 0) * 1e6,
         cached: (info.cache_read_input_token_cost || info.input_cost_per_token * 0.1) * 1e6,
+        cacheCreation: (info.cache_creation_input_token_cost || info.input_cost_per_token * 1.25) * 1e6,
       };
     }
     pricingLoaded = true;
@@ -291,6 +292,7 @@ function renderCards(data) {
   const totalReqs = data.reduce((a,d) => a + d.request_count, 0);
   const totalIn = data.reduce((a,d) => a + d.tokens_in, 0);
   const totalCached = data.reduce((a,d) => a + d.tokens_cached, 0);
+  const totalNewCache = data.reduce((a,d) => a + (d.tokens_new_cache || 0), 0);
   const totalOut = data.reduce((a,d) => a + d.tokens_out, 0);
   const cacheRate = (totalIn + totalCached) > 0 ? (totalCached / (totalIn + totalCached) * 100).toFixed(1) : '0.0';
   // estimated cost per model
@@ -298,12 +300,13 @@ function renderCards(data) {
   data.forEach(d => {
     const p = getPrice(d.model);
     if (!p) return;
-    estCost += (d.tokens_in / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + (d.tokens_out / 1e6) * p.output;
+    estCost += (d.tokens_in / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
   });
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReqs)}</div></div>
     <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalIn)}</div></div>
     <div class="card"><div class="label">Cached Input</div><div class="value">${fmtNum(totalCached)}</div></div>
+    <div class="card"><div class="label">Cache Write</div><div class="value">${fmtNum(totalNewCache)}</div></div>
     <div class="card"><div class="label">Output</div><div class="value">${fmtNum(totalOut)}</div></div>
     <div class="card"><div class="label">Cache Rate</div><div class="value">${cacheRate}%</div></div>
     <div class="card"><div class="label">Est. Cost</div><div class="value" style="color:#f59e0b">${fmtUSD(estCost)}</div></div>`;
@@ -336,7 +339,7 @@ function renderChart(data) {
     byBucket[bucket][k].noncached += d.tokens_in;
     byBucket[bucket][k].output += d.tokens_out;
     const p = getPrice(d.model);
-    if (p) byBucket[bucket][k].cost += (d.tokens_in / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + (d.tokens_out / 1e6) * p.output;
+    if (p) byBucket[bucket][k].cost += (d.tokens_in / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
   });
   const buckets = Object.keys(byBucket).sort();
   const colors = ['#0ea5e9','#7c3aed','#f59e0b','#10b981','#ef4444','#ec4899','#6366f1','#14b8a6'];
@@ -348,13 +351,13 @@ function renderChart(data) {
     const color = colors[ci % colors.length];
     const stk = 'stk_' + ci;
     if (tv === 'input') {
-      datasets.push({ label: displayDim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
-      datasets.push({ label: displayDim + ' (input)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color, stack: stk });
+      datasets.push({ label: displayDim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color, stack: stk });
+      datasets.push({ label: displayDim + ' (input)', data: buckets.map(b => (byBucket[b]?.[dim]?.noncached || 0)), backgroundColor: color + '55', stack: stk });
     } else if (tv === 'output') {
       datasets.push({ label: displayDim + ' (output)', data: buckets.map(b => (byBucket[b]?.[dim]?.output || 0)), backgroundColor: color, stack: stk });
     } else {
-      datasets.push({ label: displayDim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color + '55', stack: stk });
-      datasets.push({ label: displayDim + ' (non-cached)', data: buckets.map(b => ((byBucket[b]?.[dim]?.noncached || 0) + (byBucket[b]?.[dim]?.output || 0))), backgroundColor: color, stack: stk });
+      datasets.push({ label: displayDim + ' (cached)', data: buckets.map(b => (byBucket[b]?.[dim]?.cached || 0)), backgroundColor: color, stack: stk });
+      datasets.push({ label: displayDim + ' (non-cached)', data: buckets.map(b => ((byBucket[b]?.[dim]?.noncached || 0) + (byBucket[b]?.[dim]?.output || 0))), backgroundColor: color + '55', stack: stk });
     }
     ci++;
   });

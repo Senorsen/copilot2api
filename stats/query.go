@@ -18,8 +18,9 @@ type AggregatedEntry struct {
 	Model        string `json:"model"`
 	TokensIn     int    `json:"tokens_in"`
 	TokensOut    int    `json:"tokens_out"`
-	TokensCached int    `json:"tokens_cached"`
-	TokensTotal  int    `json:"tokens_total"`
+	TokensCached   int    `json:"tokens_cached"`
+	TokensNewCache int    `json:"tokens_new_cache"`
+	TokensTotal    int    `json:"tokens_total"`
 	RequestCount int    `json:"request_count"`
 }
 
@@ -149,6 +150,7 @@ func readJSONLFile(path string, start, end time.Time, modelFilter string, agg ma
 		entry.TokensIn += e.TokensIn
 		entry.TokensOut += e.TokensOut
 		entry.TokensCached += e.TokensCached
+		entry.TokensNewCache += e.TokensNewCache
 		entry.TokensTotal += e.TokensTotal
 		entry.RequestCount++
 		if e.Username != "" {
