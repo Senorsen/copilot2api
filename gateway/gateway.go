@@ -169,7 +169,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.mu.Lock()
 			h.affinity[affinityKey] = &affinityEntry{
 				AccountID: chosenAccountID,
-				ExpiresAt: time.Now().Add(5 * time.Minute),
+				ExpiresAt: time.Now().Add(1 * time.Hour),
 			}
 			h.mu.Unlock()
 		}
