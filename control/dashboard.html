@@ -383,8 +383,6 @@ function renderChart(data) {
     id: 'topLabels',
     afterDraw(chart) {
       const { ctx } = chart;
-      // Skip annotations on small screens (mobile)
-      if (chart.width < 600) return;
       ctx.save();
       ctx.textAlign = 'center';
       // Collect all label positions per bucket to avoid overlap
