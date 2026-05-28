@@ -407,27 +407,12 @@ function renderChart(data) {
           labelsByBucket[bi].push({ x: bar.x, baseY: bar.y - 4, line1, line2 });
         });
       });
-      // Draw with overlap avoidance: push labels up if they overlap
+      // Draw labels directly on top of bars (allow overlap)
       for (const bi in labelsByBucket) {
-        const labels = labelsByBucket[bi].sort((a, b) => a.x - b.x);
-        // Calculate occupied y ranges and push up if needed
-        let prevBottom = Infinity;
+        const labels = labelsByBucket[bi];
         for (let i = 0; i < labels.length; i++) {
           const lbl = labels[i];
-          const height = lbl.line2 ? 26 : 13;
-          let y = lbl.baseY;
-          // If this label's bottom would overlap with prev label's region, push up
-          if (i > 0) {
-            const prev = labels[i-1];
-            const prevX = prev.x, curX = lbl.x;
-            const xDist = Math.abs(curX - prevX);
-            if (xDist < 80) { // labels might overlap horizontally
-              const minY = prev._drawnTop - height - 2;
-              if (y > minY) y = minY;
-            }
-          }
-          // Draw
-          let drawY = y;
+          let drawY = lbl.baseY;
           if (lbl.line2) {
             ctx.font = '10px -apple-system, sans-serif';
             ctx.fillStyle = '#e0e0e0';
@@ -437,7 +422,7 @@ function renderChart(data) {
           ctx.font = 'bold 10px -apple-system, sans-serif';
           ctx.fillStyle = '#e0e0e0';
           ctx.fillText(lbl.line1, lbl.x, drawY);
-          lbl._drawnTop = drawY - 2;
+          // label drawn
         }
       }
       // bottom labels: dimension name at 45° with enough room
