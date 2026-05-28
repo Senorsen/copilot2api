@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=1400">
 <title>copilot2api Dashboard</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
 <style>
 :root { --bg: #1a1a2e; --surface: #16213e; --border: #0f3460; --text: #e0e0e0; --muted: #888; --accent: #0ea5e9; --accent2: #7c3aed; --accent3: #10b981; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1.5rem; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 1.5rem; min-width: 1400px; }
 .container { max-width: 1200px; margin: 0 auto; }
 h1 { margin-bottom: 1rem; font-size: 1.5rem; }
 .controls { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.8rem; align-items: center; }
@@ -25,7 +25,7 @@ select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius
 .card .value { font-size: 1.3rem; font-weight: 700; margin-top: 0.2rem; }
 .card .label { font-size: 0.75rem; color: var(--muted); }
 .chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; }
-.chart-scroll { min-width: 1200px; }
+
 canvas { width: 100% !important; }
 .token-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; }
 .token-bar input { flex: 1; max-width: 300px; padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 0.78rem; font-family: monospace; }
@@ -81,7 +81,7 @@ async function showDashboard() {
   <select id="fAccount"><option value="">All Accounts</option></select>
 </div>
 <div class="cards" id="cards"></div>
-<div class="chart-container"><div class="chart-scroll"><canvas id="chart"></canvas></div></div>`;
+<div class="chart-container"><canvas id="chart"></canvas></div>`;
 
   // populate month/quarter pickers FIRST, then attach handlers
   const now = new Date();
