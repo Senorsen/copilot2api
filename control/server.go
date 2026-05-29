@@ -20,6 +20,9 @@ import (
 //go:embed dashboard.html
 var dashboardHTML []byte
 
+//go:embed chart.umd.min.js
+var chartJS []byte
+
 // generateUUID generates a random UUID v4 string.
 func generateUUID() string {
 	var buf [16]byte
@@ -72,6 +75,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/usage", s.handleUsageQuery)
 	mux.HandleFunc("/usage/accounts", s.handleUsageAccounts)
 	mux.HandleFunc("/usage/pricing", s.handleUsagePricing)
+	mux.HandleFunc("/dashboard/chart.umd.min.js", s.handleChartJS)
 	mux.HandleFunc("/dashboard", s.handleDashboard)
 	mux.HandleFunc("/dashboard/", s.handleDashboard)
 	return s.authMiddleware(mux)
@@ -383,4 +387,10 @@ func (s *Server) handleUsagePricing(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(dashboardHTML)
+}
+
+func (s *Server) handleChartJS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Write(chartJS)
 }
