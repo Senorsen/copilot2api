@@ -24,7 +24,7 @@ select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
 .card .value { font-size: 1.3rem; font-weight: 700; margin-top: 0.2rem; }
 .card .label { font-size: 0.75rem; color: var(--muted); }
-.chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; }
+.chart-container { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; position: relative; z-index: 10; }
 
 canvas { width: 100% !important; }
 .token-bar { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.8rem; }
@@ -382,7 +382,7 @@ function renderChart(data) {
 
   const topLabelPlugin = {
     id: 'topLabels',
-    afterDraw(chart) {
+    afterDatasetsDraw(chart) {
       const { ctx } = chart;
       ctx.save();
       ctx.textAlign = 'center';
