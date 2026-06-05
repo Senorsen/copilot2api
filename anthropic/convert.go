@@ -107,6 +107,13 @@ func convertAnthropicMessageToOpenAI(msg AnthropicMessage) ([]OpenAIMessage, err
 		return convertUserMessageToOpenAI(msg)
 	} else if msg.Role == "assistant" {
 		return convertAssistantMessageToOpenAI(msg)
+	} else if msg.Role == "system" {
+		// Pass system messages through as-is to the OpenAI format.
+		text := ""
+		if msg.Content.Text != nil {
+			text = *msg.Content.Text
+		}
+		return []OpenAIMessage{{Role: "system", Content: &OpenAIContent{Text: &text}}}, nil
 	}
 
 	return nil, fmt.Errorf("unsupported message role: %s", msg.Role)

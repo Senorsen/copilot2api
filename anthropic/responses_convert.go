@@ -91,6 +91,10 @@ func convertMessageToResponsesInputItems(msg AnthropicMessage, model string) ([]
 		return convertUserMessageToResponsesInput(msg)
 	case "assistant":
 		return convertAssistantMessageToResponsesInput(msg, model)
+	case "system":
+		// Skip system messages in the messages array; they are handled
+		// via the top-level System field or converted to instructions.
+		return nil, nil
 	default:
 		return nil, fmt.Errorf("unsupported message role: %q (expected \"user\" or \"assistant\")", msg.Role)
 	}
