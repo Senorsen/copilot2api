@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"regexp"
+	"strings"
 
 	"github.com/whtsky/copilot2api/internal/models"
 )
@@ -68,6 +69,28 @@ func (h *Handler) getModelInfo(ctx context.Context, modelID string) (*models.Inf
 	}
 
 	return infoMap[modelID], false
+}
+
+// findModelBySubstring searches the upstream model list for a model ID that
+// contains the given substring. Returns the full model ID if found, or "" if
+// no match (or if the model list fetch fails). This enables fuzzy matching
+// for -1m variants like "claude-opus-4.7-1m-internal".
+func (h *Handler) findModelBySubstring(ctx context.Context, substring string) string {
+	infoMap, err := h.models.GetInfo(ctx)
+	if err != nil {
+		return ""
+	}
+	// Prefer exact match first.
+	if _, ok := infoMap[substring]; ok {
+		return substring
+	}
+	// Fall back to substring match.
+	for id := range infoMap {
+		if strings.Contains(id, substring) {
+			return id
+		}
+	}
+	return ""
 }
 
 func modelSupportsEndpoint(info *models.Info, endpoint string) bool {

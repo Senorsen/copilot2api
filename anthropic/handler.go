@@ -93,11 +93,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Detect 1M context variant: Claude Code signals this via the anthropic-beta
 	// header (e.g. "context-1m-2025-08-07"). Copilot exposes these as separate
-	// model IDs with a "-1m" suffix (e.g. "claude-opus-4.6-1m"), so we append it.
+	// model IDs with a "-1m" suffix (e.g. "claude-opus-4.6-1m"), so we look for
+	// a matching model in the upstream list. The match is fuzzy: we check if any
+	// model ID contains "{model}-1m" as a substring to handle suffixed variants
+	// like "claude-opus-4.7-1m-internal".
 	if betaHeader := r.Header.Get("anthropic-beta"); betaHeader != "" {
 		if context1mRe.MatchString(betaHeader) && !strings.Contains(resolvedModel, "-1m") {
-			slog.Debug("detected context-1m beta header, appending -1m suffix", "model", resolvedModel)
-			resolvedModel += "-1m"
+			candidate := resolvedModel + "-1m"
+			if matched := h.findModelBySubstring(r.Context(), candidate); matched != "" {
+				slog.Debug("detected context-1m beta header, using 1m variant", "model", resolvedModel, "matched", matched)
+				resolvedModel = matched
+			} else {
+				slog.Debug("context-1m beta header detected but no -1m variant in model list, skipping suffix", "model", resolvedModel)
+			}
 		}
 	}
 
