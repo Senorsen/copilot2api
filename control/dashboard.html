@@ -20,7 +20,7 @@ h1 { margin-bottom: 1rem; font-size: 1.5rem; }
 .btn.active3 { background: var(--accent3); border-color: var(--accent3); color: #fff; }
 .btn:hover { opacity: 0.85; }
 select { padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text); font-size: 0.78rem; cursor: pointer; }
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 0.8rem; margin-bottom: 1.2rem; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.8rem; margin-bottom: 1.2rem; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 0.8rem; }
 .card .value { font-size: 1.3rem; font-weight: 700; margin-top: 0.2rem; }
 .card .label { font-size: 0.75rem; color: var(--muted); }
@@ -80,6 +80,7 @@ async function showDashboard() {
   <select id="fModel"><option value="">All Models</option></select>
   <select id="fAccount"><option value="">All Accounts</option></select>
 </div>
+<div id="cards-subtitle" style="font-size:0.85rem;color:var(--muted);margin-bottom:0.5rem"></div>
 <div class="cards" id="cards"></div>
 <div class="chart-container"><canvas id="chart"></canvas></div>`;
 
@@ -305,8 +306,8 @@ function renderCards(data) {
     const noncached = d.tokens_in - d.tokens_cached;
     estCost += (noncached / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
   });
+  document.getElementById('cards-subtitle').textContent = `Requests: ${fmtNum(totalReqs)}`;
   document.getElementById('cards').innerHTML = `
-    <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReqs)}</div></div>
     <div class="card"><div class="label">Total Input</div><div class="value">${fmtNum(totalIn)}</div></div>
     <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalNoncached)}</div></div>
     <div class="card"><div class="label">Cached Input</div><div class="value">${fmtNum(totalCached)}</div></div>
