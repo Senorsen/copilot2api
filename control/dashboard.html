@@ -306,7 +306,7 @@ function renderCards(data) {
     const noncached = d.tokens_in - d.tokens_cached;
     estCost += (noncached / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
   });
-  document.getElementById('cards-subtitle').textContent = `Requests: ${fmtNum(totalReqs)}`;
+  document.getElementById('cards-subtitle').innerHTML = `Requests: <span style="font-weight:700;color:var(--text)">${fmtNum(totalReqs)}</span>`;
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Total Input</div><div class="value">${fmtNum(totalIn)}</div></div>
     <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalNoncached)}</div></div>
