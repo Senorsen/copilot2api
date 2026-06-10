@@ -295,17 +295,20 @@ function renderCards(data) {
   const totalCached = data.reduce((a,d) => a + d.tokens_cached, 0);
   const totalNewCache = data.reduce((a,d) => a + (d.tokens_new_cache || 0), 0);
   const totalOut = data.reduce((a,d) => a + d.tokens_out, 0);
-  const cacheRate = (totalIn + totalCached) > 0 ? (totalCached / (totalIn + totalCached) * 100).toFixed(1) : '0.0';
+  const totalNoncached = totalIn - totalCached;
+  const cacheRate = totalIn > 0 ? (totalCached / totalIn * 100).toFixed(1) : '0.0';
   // estimated cost per model
   let estCost = 0;
   data.forEach(d => {
     const p = getPrice(d.model);
     if (!p) return;
-    estCost += (d.tokens_in / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
+    const noncached = d.tokens_in - d.tokens_cached;
+    estCost += (noncached / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
   });
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Requests</div><div class="value">${fmtNum(totalReqs)}</div></div>
-    <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalIn)}</div></div>
+    <div class="card"><div class="label">Total Input</div><div class="value">${fmtNum(totalIn)}</div></div>
+    <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalNoncached)}</div></div>
     <div class="card"><div class="label">Cached Input</div><div class="value">${fmtNum(totalCached)}</div></div>
     <div class="card"><div class="label">Cache Write</div><div class="value">${fmtNum(totalNewCache)}</div></div>
     <div class="card"><div class="label">Output</div><div class="value">${fmtNum(totalOut)}</div></div>
@@ -337,10 +340,10 @@ function renderChart(data) {
     if (!byBucket[bucket]) byBucket[bucket] = {};
     if (!byBucket[bucket][k]) byBucket[bucket][k] = { cached: 0, noncached: 0, output: 0, cost: 0 };
     byBucket[bucket][k].cached += d.tokens_cached;
-    byBucket[bucket][k].noncached += d.tokens_in;
+    byBucket[bucket][k].noncached += (d.tokens_in - d.tokens_cached);
     byBucket[bucket][k].output += d.tokens_out;
     const p = getPrice(d.model);
-    if (p) byBucket[bucket][k].cost += (d.tokens_in / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
+    if (p) { const nc = d.tokens_in - d.tokens_cached; byBucket[bucket][k].cost += (nc / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output; }
   });
   const buckets = Object.keys(byBucket).sort();
   const colors = ['#0ea5e9','#7c3aed','#f59e0b','#10b981','#ef4444','#ec4899','#6366f1','#14b8a6'];
