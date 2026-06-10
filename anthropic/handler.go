@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/whtsky/copilot2api/debug"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/internal/sse"
@@ -114,6 +115,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		slog.Debug("resolved model alias", "from", anthropicReq.Model, "to", resolvedModel)
 		anthropicReq.Model = resolvedModel
 	}
+
+	// Debug capture: save request body for configured models
+	debug.CaptureRequest(anthropicReq.Model, reqBody)
 
 	route := "chat_completions" // default fallback
 	var usage tokenUsage

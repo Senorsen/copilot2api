@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/whtsky/copilot2api/debug"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/internal/sse"
@@ -166,6 +167,11 @@ func (h *Handler) handlePassthrough(w http.ResponseWriter, r *http.Request, endp
 
 	if modelOut != nil && len(bodyBytes) > 0 {
 		*modelOut = extractModelField(bodyBytes)
+	}
+
+	// Debug capture: save request body for configured models
+	if modelOut != nil && *modelOut != "" {
+		debug.CaptureRequest(*modelOut, bodyBytes)
 	}
 
 	h.handlePassthroughBody(w, r, endpoint, bodyBytes, usage)

@@ -4,6 +4,7 @@
 
 ### Features
 
+- Add debug request capture: set `COPILOT2API_DEBUG_MODELS=gpt-5.4,gpt-5.5` to save request bodies as formatted JSON under `{dataDir}/debug/{model}/`. Captures both OpenAI and Anthropic API requests. One file per request, named `{datetime}-{rand4hex}.json`
 - Add usage statistics system: records token usage per request to JSONL files (`stats/` package)
 - Add control plane endpoints: `GET /usage` (query aggregated stats), `GET /usage/accounts` (list accounts with data), `GET /dashboard` (HTML dashboard), `GET /usage/pricing` (LiteLLM pricing data)
 - Add interactive HTML dashboard with Chart.js stacked bar charts, time range selectors, cache hit rate cards, estimated cost, and auto-refresh

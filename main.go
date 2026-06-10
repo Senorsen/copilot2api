@@ -17,6 +17,7 @@ import (
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/control"
+	"github.com/whtsky/copilot2api/debug"
 	"github.com/whtsky/copilot2api/gateway"
 	"github.com/whtsky/copilot2api/gemini"
 	"github.com/whtsky/copilot2api/internal/models"
@@ -213,6 +214,9 @@ func main() {
 	} else {
 		slog.Info("stats disabled (set COPILOT2API_STATS_ENABLED=true to enable)")
 	}
+
+	// Initialize debug capture (opt-in via COPILOT2API_DEBUG_MODELS)
+	debug.Init(filepath.Dir(statsDir))
 
 	// Set up proxy mux with path-based routing
 	mux := http.NewServeMux()
