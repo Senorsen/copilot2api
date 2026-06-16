@@ -42,7 +42,7 @@ canvas { width: 100% !important; }
 <script>
 const app = document.getElementById('app');
 let chart = null;
-let currentRange = 30, currentAggr = 'day', currentDims = { model: true, account: false }, currentTokenView = 'all';
+let currentRange = 30, currentAggr = localStorage.getItem('c2a_aggr') || 'day', currentDims = JSON.parse(localStorage.getItem('c2a_dims') || '{"model":false,"account":false}'), currentTokenView = 'all';
 let filterModel = '', filterAccount = '';
 let rawData = [];
 
@@ -74,7 +74,7 @@ async function showDashboard() {
 </div>
 <div class="controls">
   <span class="lbl">Dimension:</span>
-  <button class="btn dim active" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim" data-dim="aggr">Aggregated</button>
+  <button class="btn dim" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim active" data-dim="aggr">Aggregated</button>
   <div class="sep"></div>
   <span class="lbl">Filter:</span>
   <select id="fModel"><option value="">All Models</option></select>
@@ -109,7 +109,7 @@ async function showDashboard() {
   });
   pmEl.onchange = () => { const v = pmEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pqEl.value=''; currentRange = 'pick:'+v; fetchData(); } };
   pqEl.onchange = () => { const v = pqEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pmEl.value=''; currentRange = 'pick:'+v; fetchData(); } };
-  document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); render(); });
+  document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; localStorage.setItem('c2a_aggr', currentAggr); document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); render(); });
   document.querySelectorAll('.tv').forEach(b => b.onclick = () => { currentTokenView = b.dataset.tv; document.querySelectorAll('.tv').forEach(x=>x.classList.remove('active3')); b.classList.add('active3'); render(); });
   document.querySelectorAll('.dim').forEach(b => b.onclick = () => {
     const dim = b.dataset.dim;
@@ -126,10 +126,20 @@ async function showDashboard() {
         document.querySelector('.dim[data-dim="aggr"]').classList.add('active');
       }
     }
+    localStorage.setItem('c2a_dims', JSON.stringify(currentDims));
     render();
   });
   document.getElementById('fModel').onchange = e => { filterModel = e.target.value; render(); };
   document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; render(); };
+
+  // Restore saved Group button
+  document.querySelectorAll('.aggr').forEach(b => { if (b.dataset.a === currentAggr) { b.classList.add('active2'); } else { b.classList.remove('active2'); } });
+  // Restore saved Dimension buttons
+  if (currentDims.model || currentDims.account) {
+    document.querySelector('.dim[data-dim="aggr"]').classList.remove('active');
+    if (currentDims.model) document.querySelector('.dim[data-dim="model"]').classList.add('active');
+    if (currentDims.account) document.querySelector('.dim[data-dim="account"]').classList.add('active');
+  }
   document.getElementById('apiToken').onchange = e => { localStorage.setItem('c2a_token', e.target.value); fetchPricing(); fetchData(); };
 
   // Auto-refresh buttons
