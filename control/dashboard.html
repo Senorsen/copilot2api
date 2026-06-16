@@ -42,8 +42,8 @@ canvas { width: 100% !important; }
 <script>
 const app = document.getElementById('app');
 let chart = null;
-let currentRange = 30, currentAggr = localStorage.getItem('c2a_aggr') || 'day', currentDims = JSON.parse(localStorage.getItem('c2a_dims') || '{"model":false,"account":false}'), currentTokenView = 'all';
-let filterModel = '', filterAccount = '';
+let currentRange = localStorage.getItem('c2a_range') || 30, currentAggr = localStorage.getItem('c2a_aggr') || 'day', currentDims = JSON.parse(localStorage.getItem('c2a_dims') || '{"model":false,"account":false}'), currentTokenView = 'all';
+let filterModel = localStorage.getItem('c2a_filterModel') || '', filterAccount = localStorage.getItem('c2a_filterAccount') || '';
 let rawData = [];
 
 async function showDashboard() {
@@ -105,10 +105,10 @@ async function showDashboard() {
 
   document.querySelectorAll('.range').forEach(b => b.onclick = () => {
     clearRangeActive(); b.classList.add('active');
-    currentRange = b.dataset.d; fetchData();
+    currentRange = b.dataset.d; localStorage.setItem('c2a_range', currentRange); fetchData();
   });
-  pmEl.onchange = () => { const v = pmEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pqEl.value=''; currentRange = 'pick:'+v; fetchData(); } };
-  pqEl.onchange = () => { const v = pqEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pmEl.value=''; currentRange = 'pick:'+v; fetchData(); } };
+  pmEl.onchange = () => { const v = pmEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pqEl.value=''; currentRange = 'pick:'+v; localStorage.setItem('c2a_range', currentRange); fetchData(); } };
+  pqEl.onchange = () => { const v = pqEl.value; if(v) { document.querySelectorAll('.range').forEach(x=>x.classList.remove('active')); pmEl.value=''; currentRange = 'pick:'+v; localStorage.setItem('c2a_range', currentRange); fetchData(); } };
   document.querySelectorAll('.aggr').forEach(b => b.onclick = () => { currentAggr = b.dataset.a; localStorage.setItem('c2a_aggr', currentAggr); document.querySelectorAll('.aggr').forEach(x=>x.classList.remove('active2')); b.classList.add('active2'); render(); });
   document.querySelectorAll('.tv').forEach(b => b.onclick = () => { currentTokenView = b.dataset.tv; document.querySelectorAll('.tv').forEach(x=>x.classList.remove('active3')); b.classList.add('active3'); render(); });
   document.querySelectorAll('.dim').forEach(b => b.onclick = () => {
@@ -129,9 +129,18 @@ async function showDashboard() {
     localStorage.setItem('c2a_dims', JSON.stringify(currentDims));
     render();
   });
-  document.getElementById('fModel').onchange = e => { filterModel = e.target.value; render(); };
-  document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; render(); };
+  document.getElementById('fModel').onchange = e => { filterModel = e.target.value; localStorage.setItem('c2a_filterModel', filterModel); render(); };
+  document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; localStorage.setItem('c2a_filterAccount', filterAccount); render(); };
 
+  // Restore saved Range button/picker
+  const savedRange = String(currentRange);
+  if (savedRange.startsWith('pick:')) {
+    document.querySelectorAll('.range').forEach(x=>x.classList.remove('active'));
+    const pickVal = savedRange.slice(5);
+    if (pickVal.length === 7) { pmEl.value = pickVal; } else { pqEl.value = pickVal; }
+  } else {
+    document.querySelectorAll('.range').forEach(b => { if (b.dataset.d === savedRange) { b.classList.add('active'); } else { b.classList.remove('active'); } });
+  }
   // Restore saved Group button
   document.querySelectorAll('.aggr').forEach(b => { if (b.dataset.a === currentAggr) { b.classList.add('active2'); } else { b.classList.remove('active2'); } });
   // Restore saved Dimension buttons
@@ -284,7 +293,7 @@ function populateFilters() {
   const prevM = filterModel, prevA = filterAccount;
   fM.innerHTML = '<option value="">All Models</option>' + [...models].sort().map(m => `<option value="${m}">${m}</option>`).join('');
   fA.innerHTML = '<option value="">All Accounts</option>' + [...accounts].sort().map(a => `<option value="${a}">${a}</option>`).join('');
-  fM.value = prevM; fA.value = prevA;
+  fM.value = prevM || filterModel; fA.value = prevA || filterAccount;
 }
 
 function filtered() {
