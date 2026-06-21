@@ -439,7 +439,6 @@ func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
-			slog.Debug("responses upstream error", "status", upstreamErr.StatusCode, "body", truncate(string(upstreamErr.Body), 500))
 			h.handleUpstreamError(w, upstreamErr)
 			return
 		}
@@ -475,7 +474,6 @@ func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
-			slog.Debug("responses streaming upstream error", "status", upstreamErr.StatusCode, "body", truncate(string(upstreamErr.Body), 500))
 			h.handleUpstreamError(w, upstreamErr)
 			return
 		}
@@ -786,12 +784,22 @@ func (h *Handler) mapUpstreamError(upstreamErr *upstream.UpstreamError) (string,
 }
 
 func (h *Handler) writeRawUpstreamError(w http.ResponseWriter, upstreamErr *upstream.UpstreamError) {
+	body := string(upstreamErr.Body)
+	if len(body) > 150 {
+		body = body[:150]
+	}
+	slog.Warn("anthropic upstream error (raw passthrough)", "status", upstreamErr.StatusCode, "body", body)
 	upstreamErr.WriteRawError(w)
 }
 
 // handleUpstreamError converts upstream OpenAI errors to Anthropic format
 func (h *Handler) handleUpstreamError(w http.ResponseWriter, upstreamErr *upstream.UpstreamError) {
 	anthropicErrorType, message := h.mapUpstreamError(upstreamErr)
+	body := string(upstreamErr.Body)
+	if len(body) > 150 {
+		body = body[:150]
+	}
+	slog.Warn("anthropic upstream error", "status", upstreamErr.StatusCode, "type", anthropicErrorType, "message", message, "upstream_body", body)
 	WriteAnthropicError(w, upstreamErr.StatusCode, anthropicErrorType, message)
 }
 
