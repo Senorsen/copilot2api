@@ -262,7 +262,7 @@ func main() {
 
 	// Create control plane server
 	adminToken := os.Getenv("ADMIN_TOKEN")
-	controlServer := control.NewServer(accountManager, adminToken, statsDir, pricingCache)
+	controlServer := control.NewServer(accountManager, adminToken, statsDir, pricingCache, modelsCache)
 	controlHTTP := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", *host, *controlPort),
 		ReadHeaderTimeout: 10 * time.Second,

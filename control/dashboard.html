@@ -180,7 +180,7 @@ function setupAutoRefresh(secs) {
   if (secs > 0) { autoRefreshTimer = setInterval(fetchData, secs * 1000); }
 }
 
-// Dynamic pricing from LiteLLM via backend
+// Dynamic pricing from LiteLLM via backend (filtered by available models)
 let PRICING = {};
 let pricingLoaded = false;
 async function fetchPricing() {
@@ -190,7 +190,7 @@ async function fetchPricing() {
     const r = await fetch('/usage/pricing', { headers: { 'Authorization': 'Bearer ' + token } });
     if (!r.ok) return;
     const data = await r.json();
-    // Convert LiteLLM format (per-token) to per-MTok for our use
+    // Server returns only relevant models, convert per-token to per-MTok
     PRICING = {};
     for (const [model, info] of Object.entries(data)) {
       if (typeof info !== 'object' || !info.input_cost_per_token) continue;

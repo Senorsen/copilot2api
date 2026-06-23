@@ -141,31 +141,79 @@ func (pc *PricingCache) GetRawJSON() ([]byte, error) {
 func (pc *PricingCache) LookupPrice(model string) *ModelPricing {
 	pc.mu.RLock()
 	defer pc.mu.RUnlock()
+	return pc.lookupPriceLocked(model)
+}
 
+// LookupPrices returns pricing for multiple models. Returns a map of model -> pricing info.
+func (pc *PricingCache) LookupPrices(models []string) map[string]json.RawMessage {
+	pc.mu.RLock()
+	defer pc.mu.RUnlock()
+
+	result := make(map[string]json.RawMessage)
+	if pc.data == nil {
+		return result
+	}
+
+	for _, model := range models {
+		model = strings.TrimSpace(model)
+		if model == "" {
+			continue
+		}
+		// Find the matching key and return its raw JSON
+		if key := pc.findKeyLocked(model); key != "" {
+			result[model] = pc.data[key]
+		}
+	}
+	return result
+}
+
+// findKeyLocked finds the cache key matching a model name. Must hold RLock.
+func (pc *PricingCache) findKeyLocked(model string) string {
+	candidates := pc.buildCandidates(model)
+
+	// Exact match first
+	for _, c := range candidates {
+		if _, ok := pc.data[c]; ok {
+			return c
+		}
+	}
+
+	// Prefix match
+	for _, c := range candidates {
+		for key := range pc.data {
+			if strings.HasPrefix(key, c) {
+				return key
+			}
+		}
+	}
+	return ""
+}
+
+// buildCandidates generates model name variations for fuzzy matching.
+func (pc *PricingCache) buildCandidates(model string) []string {
+	candidates := []string{model}
+	normalized := strings.ReplaceAll(model, ".", "-")
+	if normalized != model {
+		candidates = append(candidates, normalized)
+	}
+	for _, m := range []string{model, normalized} {
+		candidates = append(candidates, "anthropic/"+m, "openai/"+m)
+	}
+	if strings.HasSuffix(model, "-1m") {
+		base := strings.TrimSuffix(model, "-1m")
+		baseNorm := strings.ReplaceAll(base, ".", "-")
+		candidates = append(candidates, base, baseNorm, "anthropic/"+base, "anthropic/"+baseNorm, "openai/"+base, "openai/"+baseNorm)
+	}
+	return candidates
+}
+
+// lookupPriceLocked finds pricing for a model. Must hold RLock.
+func (pc *PricingCache) lookupPriceLocked(model string) *ModelPricing {
 	if pc.data == nil {
 		return nil
 	}
 
-	// Try strategies in order
-	candidates := []string{
-		model,
-		"anthropic/" + model,
-		"openai/" + model,
-	}
-
-	// Normalize dots to hyphens: claude-opus-4.6 -> claude-opus-4-6
-	normalized := strings.ReplaceAll(model, ".", "-")
-	if normalized != model {
-		candidates = append(candidates, normalized, "anthropic/"+normalized, "openai/"+normalized)
-	}
-
-	// Strip -1m suffix: claude-opus-4.6-1m -> claude-opus-4.6
-	if strings.HasSuffix(model, "-1m") {
-		base := strings.TrimSuffix(model, "-1m")
-		baseNorm := strings.ReplaceAll(base, ".", "-")
-		candidates = append(candidates, base, "anthropic/"+base, "openai/"+base)
-		candidates = append(candidates, baseNorm, "anthropic/"+baseNorm, "openai/"+baseNorm)
-	}
+	candidates := pc.buildCandidates(model)
 
 	for _, c := range candidates {
 		if raw, ok := pc.data[c]; ok {
@@ -176,7 +224,7 @@ func (pc *PricingCache) LookupPrice(model string) *ModelPricing {
 		}
 	}
 
-	// Prefix match: find keys that start with any candidate
+	// Prefix match
 	for _, c := range candidates {
 		for key, raw := range pc.data {
 			if strings.HasPrefix(key, c) {

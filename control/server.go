@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/stats"
 	"github.com/whtsky/copilot2api/storage"
 )
@@ -39,6 +40,7 @@ type Server struct {
 	adminToken   string
 	statsDir     string
 	pricingCache *stats.PricingCache
+	modelsCache  *models.Cache
 	mu           sync.Mutex
 	flows        map[string]*pendingFlow
 }
@@ -57,12 +59,13 @@ type pendingFlow struct {
 	cancel          context.CancelFunc
 }
 
-func NewServer(am *auth.AccountManager, adminToken string, statsDir string, pricingCache *stats.PricingCache) *Server {
+func NewServer(am *auth.AccountManager, adminToken string, statsDir string, pricingCache *stats.PricingCache, modelsCache *models.Cache) *Server {
 	return &Server{
 		am:           am,
 		adminToken:   adminToken,
 		statsDir:     statsDir,
 		pricingCache: pricingCache,
+		modelsCache:  modelsCache,
 		flows:        make(map[string]*pendingFlow),
 	}
 }
@@ -375,13 +378,30 @@ func (s *Server) handleUsagePricing(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "pricing not available"})
 		return
 	}
-	data, err := s.pricingCache.GetRawJSON()
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "pricing cache not found"})
+
+	// Collect model names to filter pricing data.
+	// If ?models=a,b,c is provided, use that list.
+	// Otherwise, auto-detect from the models cache (all models available to accounts).
+	var modelNames []string
+	if q := r.URL.Query().Get("models"); q != "" {
+		modelNames = strings.Split(q, ",")
+	} else if s.modelsCache != nil {
+		if info, err := s.modelsCache.GetInfo(r.Context()); err == nil {
+			for name := range info {
+				modelNames = append(modelNames, name)
+			}
+		}
+	}
+
+	if len(modelNames) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("{}"))
 		return
 	}
+
+	result := s.pricingCache.LookupPrices(modelNames)
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(data)
+	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
