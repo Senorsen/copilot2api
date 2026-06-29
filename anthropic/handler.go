@@ -92,23 +92,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Resolve model alias (e.g. claude-haiku-4-5-20251001 -> claude-haiku-4.5)
 	resolvedModel := resolveModelAlias(anthropicReq.Model)
 
-	// Detect 1M context variant: Claude Code signals this via the anthropic-beta
-	// header (e.g. "context-1m-2025-08-07"). Copilot exposes these as separate
-	// model IDs with a "-1m" suffix (e.g. "claude-opus-4.6-1m"), so we look for
-	// a matching model in the upstream list. The match is fuzzy: we check if any
-	// model ID contains "{model}-1m" as a substring to handle suffixed variants
-	// like "claude-opus-4.7-1m-internal".
-	if betaHeader := r.Header.Get("anthropic-beta"); betaHeader != "" {
-		if context1mRe.MatchString(betaHeader) && !strings.Contains(resolvedModel, "-1m") {
-			candidate := resolvedModel + "-1m"
-			if matched := h.findModelBySubstring(r.Context(), candidate); matched != "" {
-				slog.Debug("detected context-1m beta header, using 1m variant", "model", resolvedModel, "matched", matched)
-				resolvedModel = matched
-			} else {
-				slog.Debug("context-1m beta header detected but no -1m variant in model list, skipping suffix", "model", resolvedModel)
-			}
-		}
-	}
+	// Force 1M context window. GitHub Copilot no longer exposes separate "-1m"
+	// model IDs; instead the 1M window is unlocked via the anthropic-beta header
+	// "context-1m-2025-08-07" (mirrors the VSCode "Context Size: 1M" toggle). We
+	// always force this beta header for capable Claude models so the upstream
+	// never falls back to the 200k hard limit. The header is injected on every
+	// upstream call via h.context1mHeaders(); see forceContext1M for gating.
 
 	modelChanged := resolvedModel != anthropicReq.Model
 	if modelChanged {
@@ -194,7 +183,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			reqBody = newBody
 		}
-		h.handleNativeMessagesPassthrough(w, r, reqBody, anthropicReq.Stream, &usage)
+		h.handleNativeMessagesPassthrough(w, r, reqBody, anthropicReq.Model, anthropicReq.Stream, &usage)
 		return
 	}
 
@@ -228,9 +217,11 @@ func (h *Handler) validateRequest(req AnthropicMessagesRequest) error {
 	return nil
 }
 
-func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http.Request, body []byte, stream bool, usage *tokenUsage) {
+func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http.Request, body []byte, model string, stream bool, usage *tokenUsage) {
+	// Force the 1M context beta header for capable models, merging with any beta the client already sent.
+	beta1m := mergeContext1MBeta(model, r.Header.Get("anthropic-beta"))
 	if stream {
-		resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: body, Stream: true, QueryString: r.URL.RawQuery})
+		resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: body, Stream: true, QueryString: r.URL.RawQuery, ExtraHeaders: beta1m})
 		if err != nil {
 			var upstreamErr *upstream.UpstreamError
 			if errors.As(err, &upstreamErr) {
@@ -289,7 +280,7 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 		return
 	}
 
-	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: body, QueryString: r.URL.RawQuery})
+	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: body, QueryString: r.URL.RawQuery, ExtraHeaders: beta1m})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -327,7 +318,7 @@ func (h *Handler) handleViaChatCompletions(w http.ResponseWriter, r *http.Reques
 
 func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest, usage *tokenUsage) {
 	openAIReq.Stream = false
-	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq})
+	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, ExtraHeaders: context1mHeaders(openAIReq.Model)})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -366,7 +357,7 @@ func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest, usage *tokenUsage) {
 	openAIReq.Stream = true
-	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, Stream: true})
+	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, Stream: true, ExtraHeaders: context1mHeaders(openAIReq.Model)})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -435,7 +426,7 @@ func (h *Handler) handleViaResponsesAPI(w http.ResponseWriter, r *http.Request, 
 
 func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest, usage *tokenUsage) {
 	responsesReq.Stream = false
-	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq})
+	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, ExtraHeaders: context1mHeaders(responsesReq.Model)})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -470,7 +461,7 @@ func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Req
 
 func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest, usage *tokenUsage) {
 	responsesReq.Stream = true
-	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, Stream: true})
+	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, Stream: true, ExtraHeaders: context1mHeaders(responsesReq.Model)})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {

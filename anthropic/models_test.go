@@ -82,3 +82,63 @@ func TestResolveModelAlias(t *testing.T) {
 		})
 	}
 }
+
+func TestForceContext1M(t *testing.T) {
+	tests := []struct {
+		model string
+		want  bool
+	}{
+		{"claude-opus-4.6", true},
+		{"claude-sonnet-4.6", true},
+		{"claude-opus-4.7", true},
+		{"claude-opus-4.10", true},
+		{"claude-opus-4.6-1m", true},
+		{"claude-opus-5.0", true},
+		{"claude-sonnet-5.1", true},
+		{"claude-opus-4.5", false},
+		{"claude-sonnet-4", false},
+		{"claude-haiku-4.6", false},
+		{"claude-3-5-sonnet", false},
+		{"gpt-5.4", false},
+	}
+	for _, tt := range tests {
+		if got := forceContext1M(tt.model); got != tt.want {
+			t.Errorf("forceContext1M(%q) = %v, want %v", tt.model, got, tt.want)
+		}
+	}
+}
+
+func TestContext1MHeaders(t *testing.T) {
+	if h := context1mHeaders("claude-opus-4.6"); h["anthropic-beta"] != Context1MBeta {
+		t.Errorf("expected beta header for opus-4.6, got %v", h)
+	}
+	if h := context1mHeaders("claude-opus-4.5"); h != nil {
+		t.Errorf("expected nil headers for opus-4.5, got %v", h)
+	}
+}
+
+func TestMergeContext1MBeta(t *testing.T) {
+	tests := []struct {
+		model      string
+		clientBeta string
+		want       string // "" means nil header
+	}{
+		{"claude-opus-4.6", "", Context1MBeta},
+		{"claude-opus-4.5", "", ""},
+		{"claude-opus-4.5", "oauth-2025-04-20", "oauth-2025-04-20"},
+		{"claude-opus-4.6", "oauth-2025-04-20", "oauth-2025-04-20," + Context1MBeta},
+		{"claude-opus-4.6", "context-1m-2025-08-07", "context-1m-2025-08-07"},
+	}
+	for _, tt := range tests {
+		got := mergeContext1MBeta(tt.model, tt.clientBeta)
+		if tt.want == "" {
+			if got != nil {
+				t.Errorf("mergeContext1MBeta(%q,%q) = %v, want nil", tt.model, tt.clientBeta, got)
+			}
+			continue
+		}
+		if got["anthropic-beta"] != tt.want {
+			t.Errorf("mergeContext1MBeta(%q,%q) = %q, want %q", tt.model, tt.clientBeta, got["anthropic-beta"], tt.want)
+		}
+	}
+}

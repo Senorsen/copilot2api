@@ -30,6 +30,52 @@ var dateSuffixRe = regexp.MustCompile(`-(\d{8,})$`)
 // used by Claude Code to signal the 1M context window variant.
 var context1mRe = regexp.MustCompile(`\bcontext-1m\b`)
 
+// Context1MBeta is the anthropic-beta token GitHub Copilot requires to unlock
+// the 1M context window for capable Claude models. Without it the upstream
+// enforces a 200k input-token hard limit. There are no separate "-1m" model
+// IDs anymore; this header is the only switch.
+const Context1MBeta = "context-1m-2025-08-07"
+
+// context1mModelRe matches Claude models known to support the 1M context
+// window (opus / sonnet, version 4.6 or higher, with or without a date or -1m
+// suffix). Examples: claude-opus-4.6, claude-sonnet-4.6, claude-opus-4.7-1m,
+// claude-opus-4.10, claude-opus-5.0. Haiku and pre-4.6 models are excluded.
+var context1mModelRe = regexp.MustCompile(`claude-(opus|sonnet)-(4\.(?:[6-9]|\d{2,})|[5-9]\.|[1-9]\d+\.)`)
+
+// forceContext1M reports whether the given (already alias-resolved) model
+// supports the 1M context window and should always be sent the beta header.
+func forceContext1M(model string) bool {
+	return context1mModelRe.MatchString(model)
+}
+
+// context1mHeaders returns ExtraHeaders that force the 1M context window for
+// capable models. Returns nil for models that don't support it. We always
+// inject the beta header (regardless of what the client sent) so the upstream
+// never silently falls back to the 200k limit.
+func context1mHeaders(model string) map[string]string {
+	if !forceContext1M(model) {
+		return nil
+	}
+	return map[string]string{"anthropic-beta": Context1MBeta}
+}
+
+// mergeContext1MBeta returns ExtraHeaders that combine any client-provided
+// anthropic-beta tokens with the forced context-1m token for capable models.
+// Returns nil when the model doesn't support 1M and the client sent no beta.
+func mergeContext1MBeta(model, clientBeta string) map[string]string {
+	want1m := forceContext1M(model)
+	if clientBeta == "" {
+		if want1m {
+			return map[string]string{"anthropic-beta": Context1MBeta}
+		}
+		return nil
+	}
+	if want1m && !context1mRe.MatchString(clientBeta) {
+		return map[string]string{"anthropic-beta": clientBeta + "," + Context1MBeta}
+	}
+	return map[string]string{"anthropic-beta": clientBeta}
+}
+
 // resolveModelAlias returns the canonical model ID for Copilot's model list.
 // It applies the following transformations in order:
 //  1. Strip date suffixes (e.g. "-20250514")

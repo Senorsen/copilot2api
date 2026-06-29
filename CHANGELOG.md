@@ -4,6 +4,7 @@
 
 ### Features
 
+- Force 1M context window for capable Claude models (opus/sonnet 4.6+): always inject the `anthropic-beta: context-1m-2025-08-07` header upstream so requests no longer fall back to the 200k hard limit. Replaces the old `-1m` model-suffix swap (those variants no longer exist in Copilot's model list). Applies to native `/v1/messages`, `/chat/completions`, and `/responses` routes; merges with any client-provided beta header.
 - Add debug request capture: set `COPILOT2API_DEBUG_MODELS=gpt-5.4,gpt-5.5` to save request bodies as formatted JSON under `{dataDir}/debug/{model}/`. Captures both OpenAI and Anthropic API requests. One file per request, named `{datetime}-{rand4hex}.json`
 - Add usage statistics system: records token usage per request to JSONL files (`stats/` package)
 - Add control plane endpoints: `GET /usage` (query aggregated stats), `GET /usage/accounts` (list accounts with data), `GET /dashboard` (HTML dashboard), `GET /usage/pricing` (LiteLLM pricing data)
