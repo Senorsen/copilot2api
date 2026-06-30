@@ -23,8 +23,10 @@ type headersSentError struct{ err error }
 func (e *headersSentError) Error() string { return e.err.Error() }
 func (e *headersSentError) Unwrap() error { return e.err }
 
-// HandleStreamingRequest handles streaming requests to Copilot API
-func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request, endpoint string, usage *proxyTokenUsage) error {
+// HandleStreamingRequest handles streaming requests to Copilot API.
+// requestedModel is the model id the client asked for; the response stream's
+// `model` fields are rewritten back to it so clients can match their config.
+func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request, endpoint string, requestedModel string, usage *proxyTokenUsage) error {
 	var body interface{}
 	if r.Body != nil {
 		body = r.Body
@@ -57,7 +59,7 @@ func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request,
 	}
 
 	// Stream the response — headers are already sent at this point.
-	if err := h.streamResponse(w, resp.Body, endpoint, usage); err != nil {
+	if err := h.streamResponse(w, resp.Body, endpoint, requestedModel, usage); err != nil {
 		return &headersSentError{err: err}
 	}
 	return nil
@@ -65,7 +67,9 @@ func (h *Handler) HandleStreamingRequest(w http.ResponseWriter, r *http.Request,
 
 // streamResponse streams the SSE response line by line.
 // endpoint is used to select the correct termination strategy.
-func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endpoint string, usage *proxyTokenUsage) error {
+// requestedModel, when non-empty, replaces the upstream `model` id in each SSE
+// data line so the client sees the model id it requested.
+func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endpoint string, requestedModel string, usage *proxyTokenUsage) error {
 	scanner := bufio.NewScanner(body)
 
 	// Increase buffer size to handle large SSE lines (default is 64KB, increase to 1MB)
@@ -75,14 +79,25 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 	flusher, canFlush := w.(http.Flusher)
 	isResponses := endpoint == "/responses"
 
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Write the line
+	// writeLine rewrites the model id in data lines (best-effort) before writing.
+	writeLine := func(line string) error {
+		if rewritten, _, changed := rewriteSSELineModel([]byte(line), requestedModel); changed {
+			line = strings.TrimRight(string(rewritten), "\r\n")
+		}
 		if _, err := io.WriteString(w, line); err != nil {
 			return err
 		}
 		if _, err := io.WriteString(w, "\n"); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Write the line (model id rewritten when applicable)
+		if err := writeLine(line); err != nil {
 			return err
 		}
 
@@ -147,10 +162,7 @@ func (h *Handler) streamResponse(w http.ResponseWriter, body io.ReadCloser, endp
 			// Write remaining data lines for this event, then stop
 			for scanner.Scan() {
 				remaining := scanner.Text()
-				if _, err := io.WriteString(w, remaining); err != nil {
-					return err
-				}
-				if _, err := io.WriteString(w, "\n"); err != nil {
+				if err := writeLine(remaining); err != nil {
 					return err
 				}
 				// Parse usage from the termination event's data line
@@ -220,7 +232,7 @@ func isStreamingRequest(body []byte) bool {
 // converts each to Chat Completions chunks, and writes them to w.
 // Used when the client requested /chat/completions but the model only
 // supports /responses.
-func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser, usage *proxyTokenUsage) error {
+func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser, requestedModel string, usage *proxyTokenUsage) error {
 	scanner := bufio.NewScanner(body)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
@@ -273,6 +285,11 @@ func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser, usag
 						usage.Cached = chunk.Usage.PromptTokensDetails.CachedTokens
 					}
 				}
+				chunk := chunk
+				// Echo the client-requested model id to the client.
+				if requestedModel != "" {
+					chunk.Model = requestedModel
+				}
 				chunkData, err := json.Marshal(chunk)
 				if err != nil {
 					continue
@@ -324,13 +341,21 @@ func streamResponsesAsChatChunks(w http.ResponseWriter, body io.ReadCloser, usag
 // converts each to Responses API events, and writes them to w.
 // Used when the client requested /responses but the model only
 // supports /chat/completions.
-func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser, usage *proxyTokenUsage) error {
+func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser, requestedModel string, usage *proxyTokenUsage) error {
 	scanner := bufio.NewScanner(body)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024)
 
 	flusher, canFlush := w.(http.Flusher)
 	state := NewChatStreamConvertState()
+
+	// overrideEventModel rewrites the Responses event's model id to the
+	// client-requested model so the client sees the id it asked for.
+	overrideEventModel := func(event *types.ResponseStreamEvent) {
+		if requestedModel != "" && event.Response != nil {
+			event.Response.Model = requestedModel
+		}
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -348,6 +373,7 @@ func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser
 			// (no usage-only chunk arrived), emit it now without usage.
 			if state.FinishSeen && !state.Finished {
 				terminationEvent := state.buildTerminationEvent()
+				overrideEventModel(&terminationEvent)
 				if err := writeResponsesSSEEvent(w, terminationEvent); err != nil {
 					return err
 				}
@@ -365,6 +391,7 @@ func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser
 						Status: "completed",
 					},
 				}
+				overrideEventModel(&completedEvent)
 				if err := writeResponsesSSEEvent(w, completedEvent); err != nil {
 					return err
 				}
@@ -392,8 +419,9 @@ func streamChatChunksAsResponsesEvents(w http.ResponseWriter, body io.ReadCloser
 		}
 
 		events := ConvertChatChunkToResponsesStreamEvents(chunk, state)
-		for _, event := range events {
-			if err := writeResponsesSSEEvent(w, event); err != nil {
+		for i := range events {
+			overrideEventModel(&events[i])
+			if err := writeResponsesSSEEvent(w, events[i]); err != nil {
 				return err
 			}
 			if canFlush {

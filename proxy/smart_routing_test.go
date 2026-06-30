@@ -508,7 +508,7 @@ func TestStreamResponsesAsChatChunks_Basic(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamResponsesAsChatChunks(rec, body, nil)
+	err := streamResponsesAsChatChunks(rec, body, "", nil)
 	if err != nil {
 		t.Fatalf("streamResponsesAsChatChunks error: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestStreamResponsesAsChatChunks_IgnoresDataDone(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamResponsesAsChatChunks(rec, body, nil)
+	err := streamResponsesAsChatChunks(rec, body, "", nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -565,7 +565,7 @@ func TestStreamResponsesAsChatChunks_EventTypeFromSSELine(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamResponsesAsChatChunks(rec, body, nil)
+	err := streamResponsesAsChatChunks(rec, body, "", nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestStreamChatChunksAsResponsesEvents_Basic(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body, nil)
+	err := streamChatChunksAsResponsesEvents(rec, body, "", nil)
 	if err != nil {
 		t.Fatalf("streamChatChunksAsResponsesEvents error: %v", err)
 	}
@@ -617,7 +617,7 @@ func TestStreamChatChunksAsResponsesEvents_DeferredTermination(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body, nil)
+	err := streamChatChunksAsResponsesEvents(rec, body, "", nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -643,7 +643,7 @@ func TestStreamChatChunksAsResponsesEvents_DoneWithoutUsage(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body, nil)
+	err := streamChatChunksAsResponsesEvents(rec, body, "", nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -665,7 +665,7 @@ func TestStreamChatChunksAsResponsesEvents_DoneWithoutFinishReason(t *testing.T)
 
 	rec := httptest.NewRecorder()
 	body := io.NopCloser(strings.NewReader(sseInput))
-	err := streamChatChunksAsResponsesEvents(rec, body, nil)
+	err := streamChatChunksAsResponsesEvents(rec, body, "", nil)
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}

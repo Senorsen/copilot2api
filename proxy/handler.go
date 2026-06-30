@@ -45,10 +45,10 @@ func NewHandler(tokenProvider upstream.TokenProvider, transport *http.Transport,
 
 // proxyTokenUsage holds token statistics for a proxy request.
 type proxyTokenUsage struct {
-	In       int // prompt_tokens (includes cached)
-	Cached   int // prompt_tokens_details.cached_tokens
-	Out      int // completion_tokens
-	Total    int // total_tokens
+	In     int // prompt_tokens (includes cached)
+	Cached int // prompt_tokens_details.cached_tokens
+	Out    int // completion_tokens
+	Total  int // total_tokens
 }
 
 // accountInfo returns account_id and username for this handler's token provider.
@@ -192,7 +192,7 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 	// If no conversion needed, passthrough as before
 	if targetEndpoint == endpoint {
 		if streaming {
-			if err := h.HandleStreamingRequest(w, r, endpoint, usage); err != nil {
+			if err := h.HandleStreamingRequest(w, r, endpoint, extractModelField(bodyBytes), usage); err != nil {
 				var hse *headersSentError
 				if errors.As(err, &hse) {
 					// Client disconnected mid-stream — expected, not an error
@@ -222,6 +222,13 @@ func (h *Handler) handlePassthroughBody(w http.ResponseWriter, r *http.Request, 
 			extractUsageFromResponsesResponse(respData, usage)
 		} else {
 			extractUsageFromChatResponse(respData, usage)
+		}
+
+		// Echo the client-requested model id in the response body; expose the
+		// real upstream model id via the X-Upstream-Model header.
+		if rewritten, upstreamModel, changed := rewriteTopLevelModel(respData, extractModelField(bodyBytes)); changed {
+			setUpstreamModelHeader(w, upstreamModel)
+			respData = rewritten
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -299,6 +306,119 @@ func extractModelField(body []byte) string {
 		return ""
 	}
 	return top.Model
+}
+
+// setUpstreamModelHeader records the real upstream model id on a non-standard
+// response header so clients/operators can see what the upstream actually
+// returned, even though the response `model` field is rewritten to the
+// client-requested id. No-op when upstreamModel is empty.
+func setUpstreamModelHeader(w http.ResponseWriter, upstreamModel string) {
+	if upstreamModel != "" {
+		w.Header().Set("X-Upstream-Model", upstreamModel)
+	}
+}
+
+// upstreamModelIfDifferent returns upstream when it is non-empty and differs
+// from requested, otherwise "". Used to only emit the X-Upstream-Model header
+// when the upstream actually expanded/changed the model id.
+func upstreamModelIfDifferent(upstream, requested string) string {
+	if upstream != "" && upstream != requested {
+		return upstream
+	}
+	return ""
+}
+
+// rewriteTopLevelModel rewrites the top-level `model` field of a JSON response
+// body to the client-requested model id. It returns the rewritten bytes, the
+// original (upstream) model id, and whether a rewrite occurred. When
+// requestedModel is empty, the body is not a JSON object, the model field is
+// missing/unparseable, or already equal to requestedModel, it returns
+// (data, upstreamModel, false) and the caller should write the original bytes.
+func rewriteTopLevelModel(data []byte, requestedModel string) (out []byte, upstreamModel string, changed bool) {
+	if requestedModel == "" {
+		return data, "", false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return data, "", false
+	}
+	modelRaw, ok := raw["model"]
+	if !ok {
+		return data, "", false
+	}
+	if err := json.Unmarshal(modelRaw, &upstreamModel); err != nil {
+		return data, "", false
+	}
+	if upstreamModel == requestedModel {
+		return data, upstreamModel, false
+	}
+	newModelRaw, err := json.Marshal(requestedModel)
+	if err != nil {
+		return data, upstreamModel, false
+	}
+	raw["model"] = newModelRaw
+	out, err = json.Marshal(raw)
+	if err != nil {
+		return data, upstreamModel, false
+	}
+	return out, upstreamModel, true
+}
+
+// rewriteSSELineModel rewrites the top-level `model` field inside a single SSE
+// data line (OpenAI Chat Completions chunks and Responses stream events both
+// carry a `model` at the top level of their JSON payload). It returns the
+// rewritten line (preserving the trailing newline), the upstream model id seen
+// (if any), and whether a rewrite occurred. Lines without a JSON object payload,
+// without a `model` field, or already matching requestedModel pass through
+// unchanged (changed=false).
+func rewriteSSELineModel(line []byte, requestedModel string) (out []byte, upstreamModel string, changed bool) {
+	if requestedModel == "" {
+		return line, "", false
+	}
+	s := string(line)
+	trimmed := strings.TrimSpace(s)
+	const prefix = "data:"
+	if !strings.HasPrefix(trimmed, prefix) {
+		return line, "", false
+	}
+	dataStr := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	if dataStr == "" || dataStr == "[DONE]" {
+		return line, "", false
+	}
+	// Cheap pre-check to skip lines that obviously have no model field.
+	if !strings.Contains(dataStr, "\"model\"") {
+		return line, "", false
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(dataStr), &raw); err != nil {
+		return line, "", false
+	}
+	modelRaw, ok := raw["model"]
+	if !ok {
+		return line, "", false
+	}
+	if err := json.Unmarshal(modelRaw, &upstreamModel); err != nil {
+		return line, "", false
+	}
+	if upstreamModel == "" || upstreamModel == requestedModel {
+		return line, upstreamModel, false
+	}
+	newModelRaw, err := json.Marshal(requestedModel)
+	if err != nil {
+		return line, upstreamModel, false
+	}
+	raw["model"] = newModelRaw
+	newData, err := json.Marshal(raw)
+	if err != nil {
+		return line, upstreamModel, false
+	}
+	newline := ""
+	if strings.HasSuffix(s, "\r\n") {
+		newline = "\r\n"
+	} else if strings.HasSuffix(s, "\n") {
+		newline = "\n"
+	}
+	return []byte("data: " + string(newData) + newline), upstreamModel, true
 }
 
 // extractUsageFromChatResponse parses usage fields from an OpenAI Chat Completions JSON response.
@@ -404,6 +524,10 @@ func (h *Handler) handleChatToResponsesNonStreaming(w http.ResponseWriter, r *ht
 		return
 	}
 
+	// chatResp.Model is already the client-requested model (chatReq.Model);
+	// surface the real upstream model id via the X-Upstream-Model header.
+	setUpstreamModelHeader(w, upstreamModelIfDifferent(responsesResult.Model, chatReq.Model))
+
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(result)
 }
@@ -450,6 +574,11 @@ func (h *Handler) handleResponsesToChatNonStreaming(w http.ResponseWriter, r *ht
 	}
 
 	responsesResult := ConvertChatResponseToResponsesResult(chatResp)
+	// Echo the client-requested model id; expose the real upstream model id via header.
+	if responsesReq.Model != "" {
+		setUpstreamModelHeader(w, upstreamModelIfDifferent(responsesResult.Model, responsesReq.Model))
+		responsesResult.Model = responsesReq.Model
+	}
 	// Extract usage from chat response
 	if chatResp.Usage != nil && usage != nil {
 		usage.In = chatResp.Usage.PromptTokens
@@ -593,7 +722,7 @@ func (h *Handler) handleChatToResponsesStreaming(w http.ResponseWriter, r *http.
 		flusher.Flush()
 	}
 
-	if err := streamResponsesAsChatChunks(w, resp.Body, usage); err != nil {
+	if err := streamResponsesAsChatChunks(w, resp.Body, chatReq.Model, usage); err != nil {
 		slog.Error("streaming conversion failed (responses→chat)", "error", err)
 		// Headers already sent, can't write HTTP error
 	}
@@ -640,7 +769,7 @@ func (h *Handler) handleResponsesToChatStreaming(w http.ResponseWriter, r *http.
 		flusher.Flush()
 	}
 
-	if err := streamChatChunksAsResponsesEvents(w, resp.Body, usage); err != nil {
+	if err := streamChatChunksAsResponsesEvents(w, resp.Body, responsesReq.Model, usage); err != nil {
 		slog.Error("streaming conversion failed (chat→responses)", "error", err)
 		// Headers already sent, can't write HTTP error
 	}
