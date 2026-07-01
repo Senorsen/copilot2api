@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=1400">
-<title>copilot2api Dashboard</title>
+<title>LLM Gateway Dashboard</title>
 <script src="/dashboard/chart.umd.min.js"></script>
 <style>
 :root { --bg: #1a1a2e; --surface: #16213e; --border: #0f3460; --text: #e0e0e0; --muted: #888; --accent: #0ea5e9; --accent2: #7c3aed; --accent3: #10b981; }
@@ -47,7 +47,7 @@ let filterModel = localStorage.getItem('c2a_filterModel') || '', filterAccount =
 let rawData = [];
 
 async function showDashboard() {
-  app.innerHTML = `<h1>📊 copilot2api Usage</h1>
+  app.innerHTML = `<h1>📊 LLM Gateway Usage</h1>
 <div class="token-bar">
   <span class="lbl">API Key:</span>
   <input type="password" id="apiToken" placeholder="Enter control plane admin token" value="${localStorage.getItem('c2a_token') || ''}">
