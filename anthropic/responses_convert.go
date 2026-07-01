@@ -221,12 +221,16 @@ func createResponsesFunctionToolCall(block AnthropicContentBlock) ResponseInputI
 }
 
 func createResponsesReasoningItem(block AnthropicContentBlock) ResponseInputItem {
-	parts := strings.SplitN(block.Signature, "@", 2)
-	encryptedContent := parts[0]
-	id := ""
-	if len(parts) > 1 {
-		id = parts[1]
-	}
+	// Signature encodes "encryptedContent@id" (see mapResponsesOutputToAnthropicContent).
+	// Only encrypted_content is replayed upstream — the rs_* id is intentionally
+	// dropped. Reasoning items are sent with store=false (see
+	// ConvertAnthropicToResponses), so nothing is persisted server-side to
+	// resolve the id against on a later turn; replaying it risks a 404 ("Item
+	// with id 'rs_...' not found. Items are not persisted when store is set to
+	// false."). encrypted_content is the correct out-of-band channel for
+	// carrying reasoning context across turns under store=false, so it (and
+	// summary) must still be preserved verbatim. Mirrors Wei-Shaw/sub2api#3588.
+	encryptedContent, _, _ := strings.Cut(block.Signature, "@")
 
 	thinking := block.Thinking
 
@@ -241,7 +245,6 @@ func createResponsesReasoningItem(block AnthropicContentBlock) ResponseInputItem
 
 	return ResponseInputItem{
 		Type:             "reasoning",
-		ID:               id,
 		Summary:          summary,
 		EncryptedContent: encryptedContent,
 	}

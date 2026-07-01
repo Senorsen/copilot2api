@@ -167,24 +167,29 @@ func convertUserMessageToInput(msg types.OpenAIMessage) types.ResponseInputItem 
 func convertAssistantMessageToInput(msg types.OpenAIMessage) []types.ResponseInputItem {
 	var items []types.ResponseInputItem
 
-	// Emit reasoning items (preserving encrypted_content for multi-turn)
+	// Emit reasoning items (preserving encrypted_content for multi-turn).
+	// The rs_* id is intentionally dropped: these requests are sent with
+	// store=false (see ConvertChatToResponsesRequest), so nothing is
+	// persisted server-side to resolve the id against, and replaying it risks
+	// a 404 ("Item with id 'rs_...' not found. Items are not persisted when
+	// store is set to false."). encrypted_content is the correct out-of-band
+	// channel for carrying reasoning context across turns under store=false.
+	// Upstream also requires a summary field, so backfill an empty array when
+	// the source item has none. Mirrors Wei-Shaw/sub2api#3588.
 	if len(msg.ReasoningItems) > 0 {
 		for _, ri := range msg.ReasoningItems {
 			item := types.ResponseInputItem{
 				Type:             "reasoning",
-				ID:               ri.ID,
 				EncryptedContent: ri.EncryptedContent,
 			}
-			if len(ri.Summary) > 0 {
-				summaryBlocks := make([]types.ResponseSummaryBlock, len(ri.Summary))
-				for i, s := range ri.Summary {
-					summaryBlocks[i] = types.ResponseSummaryBlock{
-						Type: s.Type,
-						Text: s.Text,
-					}
+			summaryBlocks := make([]types.ResponseSummaryBlock, len(ri.Summary))
+			for i, s := range ri.Summary {
+				summaryBlocks[i] = types.ResponseSummaryBlock{
+					Type: s.Type,
+					Text: s.Text,
 				}
-				item.Summary = &summaryBlocks
 			}
+			item.Summary = &summaryBlocks
 			items = append(items, item)
 		}
 	}

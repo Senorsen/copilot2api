@@ -203,6 +203,14 @@ func TestConvertAnthropicToResponses_ToolUse(t *testing.T) {
 }
 
 func TestConvertAnthropicToResponses_ThinkingBlock(t *testing.T) {
+	// The rs_* id in the signature ties a reasoning item to a specific
+	// upstream store=true response. Since Responses API requests here are
+	// always sent with store=false (see ConvertAnthropicToResponses),
+	// replaying that id upstream on a later turn 404s ("Item with id
+	// 'rs_...' not found. Items are not persisted when store is set to
+	// false."). The id must be stripped while encrypted_content/summary
+	// (the actual out-of-band carrier of reasoning context under
+	// store=false) survive verbatim. Mirrors Wei-Shaw/sub2api#3588.
 	req := AnthropicMessagesRequest{
 		Model:     "claude-3.5-sonnet",
 		MaxTokens: 4096,
@@ -232,8 +240,8 @@ func TestConvertAnthropicToResponses_ThinkingBlock(t *testing.T) {
 	if result.Input[0].Type != "reasoning" {
 		t.Errorf("input[0] type=%q, want reasoning", result.Input[0].Type)
 	}
-	if result.Input[0].ID != "reason_123" {
-		t.Errorf("input[0] id=%q, want reason_123", result.Input[0].ID)
+	if result.Input[0].ID != "" {
+		t.Errorf("input[0] id=%q, want empty (rs_* id must not be replayed under store=false)", result.Input[0].ID)
 	}
 	if result.Input[0].EncryptedContent != "enc_data" {
 		t.Errorf("input[0] encrypted_content=%q, want enc_data", result.Input[0].EncryptedContent)

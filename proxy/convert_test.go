@@ -1653,6 +1653,13 @@ func TestConvertResponsesResultToChatResponse_ReasoningWithEncryptedContent(t *t
 }
 
 func TestConvertChatToResponsesRequest_ReasoningItemsRoundtrip(t *testing.T) {
+	// The rs_* id must not be replayed upstream: these requests are sent
+	// with store=false (see ConvertChatToResponsesRequest), so nothing is
+	// persisted server-side to resolve the id against, and replaying it
+	// risks a 404 ("Item with id 'rs_...' not found. Items are not
+	// persisted when store is set to false."). encrypted_content/summary
+	// (the actual out-of-band carrier under store=false) must still
+	// survive verbatim. Mirrors Wei-Shaw/sub2api#3588.
 	text := "Answer"
 	req := types.OpenAIChatCompletionsRequest{
 		Model: "gpt-4",
@@ -1685,11 +1692,14 @@ func TestConvertChatToResponsesRequest_ReasoningItemsRoundtrip(t *testing.T) {
 	if ri.Type != "reasoning" {
 		t.Errorf("Input[0].Type = %q, want reasoning", ri.Type)
 	}
-	if ri.ID != "rs_abc" {
-		t.Errorf("Input[0].ID = %q, want rs_abc", ri.ID)
+	if ri.ID != "" {
+		t.Errorf("Input[0].ID = %q, want empty (rs_* id must not be replayed under store=false)", ri.ID)
 	}
 	if ri.EncryptedContent != "encrypted_data_here" {
 		t.Errorf("Input[0].EncryptedContent = %q, want encrypted_data_here", ri.EncryptedContent)
+	}
+	if ri.Summary == nil || len(*ri.Summary) != 1 || (*ri.Summary)[0].Text != "Thinking..." {
+		t.Errorf("Input[0].Summary = %v, want [{summary_text Thinking...}]", ri.Summary)
 	}
 	// Second should be assistant message
 	if result.Input[1].Type != "message" || result.Input[1].Role != "assistant" {
@@ -1697,9 +1707,48 @@ func TestConvertChatToResponsesRequest_ReasoningItemsRoundtrip(t *testing.T) {
 	}
 }
 
+// TestConvertChatToResponsesRequest_ReasoningItemBackfillsEmptySummary covers
+// the case where a source reasoning item has no summary at all (nil slice).
+// Upstream requires a summary field on every reasoning input item (missing ->
+// 400 "Missing required parameter 'input[N].summary'"), so the converter must
+// backfill an empty array rather than omit the field. Mirrors
+// Wei-Shaw/sub2api#3588 contract 5.
+func TestConvertChatToResponsesRequest_ReasoningItemBackfillsEmptySummary(t *testing.T) {
+	text := "Answer"
+	req := types.OpenAIChatCompletionsRequest{
+		Model: "gpt-4",
+		Messages: []types.OpenAIMessage{
+			{
+				Role:    "assistant",
+				Content: &types.OpenAIContent{Text: &text},
+				ReasoningItems: []types.ReasoningItem{
+					{ID: "rs_bare", Type: "reasoning", EncryptedContent: "enc"},
+				},
+			},
+		},
+	}
+
+	result := ConvertChatToResponsesRequest(req)
+	if len(result.Input) < 1 {
+		t.Fatalf("Input length = %d, want >= 1", len(result.Input))
+	}
+	ri := result.Input[0]
+	if ri.Summary == nil {
+		t.Fatal("Input[0].Summary = nil, want backfilled empty slice")
+	}
+	if len(*ri.Summary) != 0 {
+		t.Errorf("Input[0].Summary = %v, want empty", *ri.Summary)
+	}
+}
+
 func TestReasoningEncryptedContent_FullRoundtrip(t *testing.T) {
 	// Simulate: Responses API result → Chat response → back to Responses request
-	// The encrypted_content should survive the roundtrip.
+	// encrypted_content should survive the roundtrip verbatim, but the rs_*
+	// id must NOT be replayed on the next turn's request: these requests go
+	// out with store=false (see ConvertChatToResponsesRequest), so nothing
+	// is persisted server-side to resolve the id against, and replaying it
+	// risks a 404 ("Item with id 'rs_...' not found. Items are not
+	// persisted when store is set to false."). Mirrors Wei-Shaw/sub2api#3588.
 
 	// Step 1: Responses result with encrypted_content
 	responsesResult := types.ResponsesResult{
@@ -1739,7 +1788,8 @@ func TestReasoningEncryptedContent_FullRoundtrip(t *testing.T) {
 	// Step 4: Convert to Responses request
 	responsesReq := ConvertChatToResponsesRequest(chatReq)
 
-	// Verify encrypted_content survived
+	// Verify encrypted_content survived, but the rs_* id was stripped so it
+	// is not replayed upstream under store=false.
 	foundReasoning := false
 	for _, item := range responsesReq.Input {
 		if item.Type == "reasoning" {
@@ -1747,8 +1797,8 @@ func TestReasoningEncryptedContent_FullRoundtrip(t *testing.T) {
 			if item.EncryptedContent != "secret_encrypted_blob" {
 				t.Errorf("EncryptedContent = %q, want secret_encrypted_blob", item.EncryptedContent)
 			}
-			if item.ID != "rs_123" {
-				t.Errorf("ID = %q, want rs_123", item.ID)
+			if item.ID != "" {
+				t.Errorf("ID = %q, want empty (rs_* id must not be replayed under store=false)", item.ID)
 			}
 		}
 	}
