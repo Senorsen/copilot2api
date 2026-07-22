@@ -205,7 +205,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if capabilityFetchFailed {
-		slog.Warn("failed to fetch model capabilities, falling back to Chat Completions", "model", anthropicReq.Model)
+		slog.Warn("failed to fetch model capabilities, token unavailable", "model", anthropicReq.Model)
+		WriteAnthropicError(w, http.StatusServiceUnavailable, AnthropicErrorTypeOverloaded, "Upstream authentication token is currently unavailable; please retry shortly")
+		return
 	}
 
 	h.handleViaChatCompletions(w, r, anthropicReq, originalModel, &usage)

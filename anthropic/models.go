@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/whtsky/copilot2api/internal/models"
 )
@@ -104,17 +105,46 @@ func resolveModelAlias(modelID string) string {
 	return modelID
 }
 
+// isTokenError reports whether err looks like a GitHub token acquisition
+// failure (expired/refresh failed) that is worth retrying after a short delay.
+func isTokenError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "no valid github token available") ||
+		strings.Contains(msg, "authentication required") ||
+		strings.Contains(msg, "no valid github token")
+}
+
 // getModelInfo returns cached model info, fetching from upstream if needed.
+// On token-related errors it retries up to 2 times (3 attempts total) with a
+// 1 second delay between attempts.
 func (h *Handler) getModelInfo(ctx context.Context, modelID string) (*models.Info, bool) {
 	modelID = resolveModelAlias(modelID)
 
-	infoMap, err := h.models.GetInfo(ctx)
-	if err != nil {
-		slog.Error("failed to fetch models for capability detection", "error", err)
-		return nil, true
+	const maxRetries = 2
+	var err error
+	var infoMap map[string]*models.Info
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		infoMap, err = h.models.GetInfo(ctx)
+		if err == nil {
+			return infoMap[modelID], false
+		}
+		if !isTokenError(err) || attempt == maxRetries {
+			break
+		}
+		slog.Warn("token unavailable fetching models for capability detection, retrying", "error", err, "attempt", attempt+1)
+		select {
+		case <-ctx.Done():
+			slog.Error("failed to fetch models for capability detection", "error", ctx.Err())
+			return nil, true
+		case <-time.After(time.Second):
+		}
 	}
 
-	return infoMap[modelID], false
+	slog.Error("failed to fetch models for capability detection", "error", err)
+	return nil, true
 }
 
 // findModelBySubstring searches the upstream model list for a model ID that
