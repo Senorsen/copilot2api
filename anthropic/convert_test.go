@@ -88,6 +88,55 @@ func TestConvertAnthropicToOpenAI_WithSystem(t *testing.T) {
 	}
 }
 
+func TestConvertAnthropicToOpenAI_SystemRolesInMessages(t *testing.T) {
+	req := AnthropicMessagesRequest{
+		Model:     "gpt-5.6-sol",
+		MaxTokens: 4096,
+		System:    &AnthropicSystem{Text: stringPtr("top-level")},
+		Messages: []AnthropicMessage{
+			{Role: "system", Content: AnthropicContent{Text: stringPtr("first")}},
+			{Role: "system", Content: AnthropicContent{Blocks: []AnthropicContentBlock{
+				{Type: "text", Text: "second-a"},
+				{Type: "text", Text: "second-b"},
+			}}},
+			{Role: "user", Content: AnthropicContent{Text: stringPtr("hello")}},
+		},
+	}
+
+	got, err := ConvertAnthropicToOpenAI(req)
+	if err != nil {
+		t.Fatalf("ConvertAnthropicToOpenAI returned error: %v", err)
+	}
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages = %d, want system + user", len(got.Messages))
+	}
+	if got.Messages[0].Role != "system" || got.Messages[0].Content == nil || got.Messages[0].Content.Text == nil {
+		t.Fatalf("first message is not a text system message: %+v", got.Messages[0])
+	}
+	want := "top-level\n\nfirst\n\nsecond-a\n\nsecond-b"
+	if *got.Messages[0].Content.Text != want {
+		t.Fatalf("system content = %q, want %q", *got.Messages[0].Content.Text, want)
+	}
+	if got.Messages[1].Role != "user" {
+		t.Fatalf("second role = %q, want user", got.Messages[1].Role)
+	}
+}
+
+func TestConvertAnthropicToOpenAI_RejectsNonTextSystemBlock(t *testing.T) {
+	req := AnthropicMessagesRequest{
+		Model:     "gpt-5.6-sol",
+		MaxTokens: 4096,
+		Messages: []AnthropicMessage{
+			{Role: "system", Content: AnthropicContent{Blocks: []AnthropicContentBlock{{Type: "image"}}}},
+			{Role: "user", Content: AnthropicContent{Text: stringPtr("hello")}},
+		},
+	}
+
+	if _, err := ConvertAnthropicToOpenAI(req); err == nil {
+		t.Fatal("expected non-text system block to return an error")
+	}
+}
+
 func TestConvertAnthropicToOpenAI_ToolUse(t *testing.T) {
 	anthropicReq := AnthropicMessagesRequest{
 		Model:     "claude-3-sonnet-20240229",
@@ -558,4 +607,3 @@ func TestConvertOpenAIToAnthropic_SplitChoices(t *testing.T) {
 		t.Errorf("Expected stop_reason 'tool_use', got %q", anthropicResp.StopReason)
 	}
 }
-

@@ -36,8 +36,16 @@ func ConvertAnthropicToOpenAI(req AnthropicMessagesRequest) (OpenAIChatCompletio
 		}
 	}
 
+	// Anthropic formally permits system only as a top-level field, but some
+	// compatible clients put one or more system roles in messages. Canonicalize
+	// them first so all instructions survive the Chat Completions conversion.
+	system, canonicalMessages, err := canonicalizeSystemMessages(req.System, req.Messages)
+	if err != nil {
+		return openAIReq, fmt.Errorf("failed to normalize system messages: %w", err)
+	}
+
 	// Convert messages
-	messages, err := convertAnthropicMessagesToOpenAI(req.System, req.Messages)
+	messages, err := convertAnthropicMessagesToOpenAI(system, canonicalMessages)
 	if err != nil {
 		return openAIReq, fmt.Errorf("failed to convert messages: %w", err)
 	}

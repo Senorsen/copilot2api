@@ -176,7 +176,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// Only re-encode the body for native passthrough (the only path that
 		// sends raw reqBody). Responses and Chat Completions paths use the
 		// parsed struct, so they skip this JSON round-trip.
-		if modelChanged || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement || topLevelInfo.HasEnabledThinking {
+		if modelChanged || cacheControlInfo.ScopeCount > 0 || topLevelInfo.HasContextManagement || topLevelInfo.HasEnabledThinking || topLevelInfo.HasSystemMessageRole {
 			newBody, err := normalizeNativeMessagesBody(reqBody, resolvedModel, modelChanged)
 			if err != nil {
 				WriteAnthropicError(w, http.StatusBadRequest, AnthropicErrorTypeInvalidRequest, fmt.Sprintf("Invalid JSON: %v", err))
@@ -190,6 +190,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if topLevelInfo.HasEnabledThinking {
 				slog.Debug("normalized native /messages request", "rewritten_thinking_type", "enabled -> adaptive")
+			}
+			if topLevelInfo.HasSystemMessageRole {
+				slog.Debug("normalized native /messages request", "moved_message_role", "system -> top-level system")
 			}
 			reqBody = newBody
 		}
@@ -901,6 +904,9 @@ func normalizeNativeMessagesBody(body []byte, newModel string, replaceModel bool
 	}
 
 	delete(obj, "context_management")
+	if _, err := normalizeNativeSystemMessageRoles(obj); err != nil {
+		return nil, err
+	}
 	stripCacheControlScope(obj)
 
 	// Rewrite thinking.type "enabled" -> "adaptive" for Copilot backend compatibility.
@@ -944,6 +950,7 @@ type topLevelFieldInspection struct {
 	Keys                 []string
 	HasContextManagement bool
 	HasEnabledThinking   bool
+	HasSystemMessageRole bool
 }
 
 func inspectTopLevelFields(body []byte) topLevelFieldInspection {
@@ -970,7 +977,87 @@ func inspectTopLevelFields(body []byte) topLevelFieldInspection {
 		}
 	}
 
-	return topLevelFieldInspection{Keys: keys, HasContextManagement: hasContextManagement, HasEnabledThinking: hasEnabledThinking}
+	hasSystemMessageRole := false
+	if messages, ok := raw["messages"].([]interface{}); ok {
+		for _, message := range messages {
+			if obj, ok := message.(map[string]interface{}); ok && obj["role"] == "system" {
+				hasSystemMessageRole = true
+				break
+			}
+		}
+	}
+
+	return topLevelFieldInspection{
+		Keys:                 keys,
+		HasContextManagement: hasContextManagement,
+		HasEnabledThinking:   hasEnabledThinking,
+		HasSystemMessageRole: hasSystemMessageRole,
+	}
+}
+
+// normalizeNativeSystemMessageRoles moves OpenAI-style system messages into
+// Anthropic's canonical top-level system field while preserving existing raw
+// text blocks (including cache_control metadata). It is used only for native
+// passthrough; converted Chat/Responses requests use the typed canonicalizer.
+func normalizeNativeSystemMessageRoles(obj map[string]interface{}) (bool, error) {
+	rawMessages, ok := obj["messages"]
+	if !ok {
+		return false, nil
+	}
+	messages, ok := rawMessages.([]interface{})
+	if !ok {
+		return false, fmt.Errorf("messages must be an array")
+	}
+
+	var systemBlocks []interface{}
+	if rawSystem, exists := obj["system"]; exists {
+		switch system := rawSystem.(type) {
+		case string:
+			systemBlocks = append(systemBlocks, map[string]interface{}{"type": "text", "text": system})
+		case []interface{}:
+			systemBlocks = append(systemBlocks, system...)
+		case nil:
+		default:
+			return false, fmt.Errorf("system must be a string or array of text blocks")
+		}
+	}
+
+	kept := make([]interface{}, 0, len(messages))
+	changed := false
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]interface{})
+		if !ok || message["role"] != "system" {
+			kept = append(kept, rawMessage)
+			continue
+		}
+		changed = true
+
+		content, exists := message["content"]
+		if !exists {
+			return false, fmt.Errorf("system message is missing content")
+		}
+		switch value := content.(type) {
+		case string:
+			systemBlocks = append(systemBlocks, map[string]interface{}{"type": "text", "text": value})
+		case []interface{}:
+			for _, rawBlock := range value {
+				block, ok := rawBlock.(map[string]interface{})
+				if !ok || block["type"] != "text" {
+					return false, fmt.Errorf("system message content blocks must all have type text")
+				}
+				systemBlocks = append(systemBlocks, rawBlock)
+			}
+		default:
+			return false, fmt.Errorf("system message content must be a string or array of text blocks")
+		}
+	}
+
+	if !changed {
+		return false, nil
+	}
+	obj["messages"] = kept
+	obj["system"] = systemBlocks
+	return true, nil
 }
 
 type cacheControlInspection struct {

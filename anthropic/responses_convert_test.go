@@ -53,6 +53,34 @@ func TestConvertAnthropicToResponses_SimpleText(t *testing.T) {
 	}
 }
 
+func TestConvertAnthropicToResponses_SystemRolesBecomeInstructions(t *testing.T) {
+	req := AnthropicMessagesRequest{
+		Model:     "gpt-5.6-sol",
+		MaxTokens: 4096,
+		System:    &AnthropicSystem{Text: stringPtr("top-level")},
+		Messages: []AnthropicMessage{
+			{Role: "system", Content: AnthropicContent{Text: stringPtr("first")}},
+			{Role: "system", Content: AnthropicContent{Blocks: []AnthropicContentBlock{
+				{Type: "text", Text: "second-a"},
+				{Type: "text", Text: "second-b"},
+			}}},
+			{Role: "user", Content: AnthropicContent{Text: stringPtr("hello")}},
+		},
+	}
+
+	got, err := ConvertAnthropicToResponses(req)
+	if err != nil {
+		t.Fatalf("ConvertAnthropicToResponses returned error: %v", err)
+	}
+	want := "top-level\n\nfirst\n\nsecond-a\n\nsecond-b"
+	if got.Instructions == nil || *got.Instructions != want {
+		t.Fatalf("instructions = %v, want %q", got.Instructions, want)
+	}
+	if len(got.Input) != 1 || got.Input[0].Role != "user" {
+		t.Fatalf("input = %+v, want only the user message", got.Input)
+	}
+}
+
 func TestConvertAnthropicToResponses_MaxTokensFloor(t *testing.T) {
 	req := AnthropicMessagesRequest{
 		Model:     "test-model",
@@ -79,25 +107,29 @@ func TestResolveReasoningEffort(t *testing.T) {
 
 	tests := []struct {
 		name     string
+		model    string
 		thinking *AnthropicThinking
 		output   *AnthropicOutputConfig
 		want     string
 	}{
-		{"nil both", nil, nil, "high"},
-		{"thinking low budget", budget(4000), nil, "low"},
-		{"thinking medium budget", budget(10000), nil, "medium"},
-		{"thinking high budget", budget(20000), nil, "high"},
-		{"output_config low", nil, effort("low"), "low"},
-		{"output_config medium", nil, effort("medium"), "medium"},
-		{"output_config high", nil, effort("high"), "high"},
-		{"output_config max maps to high", nil, effort("max"), "high"},
-		{"output_config overrides thinking", budget(4000), effort("high"), "high"},
-		{"output_config empty falls back to thinking", budget(4000), &AnthropicOutputConfig{}, "low"},
+		{"nil both", "test-model", nil, nil, "high"},
+		{"thinking low budget", "test-model", budget(4000), nil, "low"},
+		{"thinking medium budget", "test-model", budget(10000), nil, "medium"},
+		{"thinking high budget", "test-model", budget(20000), nil, "high"},
+		{"output_config low", "test-model", nil, effort("low"), "low"},
+		{"output_config medium", "test-model", nil, effort("medium"), "medium"},
+		{"output_config high", "test-model", nil, effort("high"), "high"},
+		{"unsupported model max maps to high", "gpt-5.5", nil, effort("max"), "high"},
+		{"gpt 5.6 sol preserves max", "gpt-5.6-sol", nil, effort("max"), "max"},
+		{"gpt 5.6 sol variant preserves max", "gpt-5.6-sol-2026-08-01", nil, effort("max"), "max"},
+		{"similar model name still downgrades max", "gpt-5.6-solitude", nil, effort("max"), "high"},
+		{"output_config overrides thinking", "test-model", budget(4000), effort("high"), "high"},
+		{"output_config empty falls back to thinking", "test-model", budget(4000), &AnthropicOutputConfig{}, "low"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveReasoningEffort(tt.thinking, tt.output)
+			got := resolveReasoningEffort(tt.model, tt.thinking, tt.output)
 			if got != tt.want {
 				t.Errorf("resolveReasoningEffort() = %q, want %q", got, tt.want)
 			}
@@ -469,8 +501,8 @@ func TestConvertResponsesToAnthropic_CachedTokens(t *testing.T) {
 		Status: "completed",
 		Output: []ResponseOutputItem{{Type: "message", Content: []ResponseOutputContent{{Type: "output_text", Text: "Hi"}}}},
 		Usage: &ResponsesUsage{
-			InputTokens:  100,
-			OutputTokens: 10,
+			InputTokens:        100,
+			OutputTokens:       10,
 			InputTokensDetails: &InputTokenDetails{CachedTokens: 30},
 		},
 	}

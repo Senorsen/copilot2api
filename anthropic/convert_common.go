@@ -29,6 +29,60 @@ func extractSystemText(system *AnthropicSystem) *string {
 	return nil
 }
 
+// canonicalizeSystemMessages accepts the OpenAI-style system roles that some
+// Anthropic-compatible clients put in messages, and folds them into Anthropic's
+// canonical top-level system field. The Messages API itself only permits user
+// and assistant roles, but rejecting this common compatibility shape prevents
+// Claude Code from using non-Anthropic upstream models through the proxy.
+//
+// System instructions must never be silently dropped: Responses consumes the
+// canonical value via instructions, while Chat Completions emits a system
+// message. Keep the top-level system first, then append in-message systems in
+// their original order.
+func canonicalizeSystemMessages(system *AnthropicSystem, messages []AnthropicMessage) (*AnthropicSystem, []AnthropicMessage, error) {
+	var instructionParts []string
+	if text := extractSystemText(system); text != nil && *text != "" {
+		instructionParts = append(instructionParts, *text)
+	}
+
+	kept := make([]AnthropicMessage, 0, len(messages))
+	for _, msg := range messages {
+		if msg.Role != "system" {
+			kept = append(kept, msg)
+			continue
+		}
+
+		text, err := extractSystemMessageText(msg.Content)
+		if err != nil {
+			return nil, nil, err
+		}
+		if text != "" {
+			instructionParts = append(instructionParts, text)
+		}
+	}
+
+	if len(instructionParts) == 0 {
+		return nil, kept, nil
+	}
+	combined := strings.Join(instructionParts, "\n\n")
+	return &AnthropicSystem{Text: &combined}, kept, nil
+}
+
+func extractSystemMessageText(content AnthropicContent) (string, error) {
+	if content.Text != nil {
+		return *content.Text, nil
+	}
+
+	parts := make([]string, 0, len(content.Blocks))
+	for _, block := range content.Blocks {
+		if block.Type != "text" {
+			return "", fmt.Errorf("system message content block type %q is unsupported; expected text", block.Type)
+		}
+		parts = append(parts, block.Text)
+	}
+	return strings.Join(parts, "\n\n"), nil
+}
+
 // ToolNameDescSchema holds the fields common to every tool definition format.
 type ToolNameDescSchema struct {
 	Name        string

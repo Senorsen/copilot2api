@@ -8,15 +8,23 @@ import (
 
 // resolveReasoningEffort determines the reasoning effort level for the Responses API.
 // OutputConfig.Effort takes priority when set; otherwise falls back to thinking budget.
-func resolveReasoningEffort(thinking *AnthropicThinking, outputConfig *AnthropicOutputConfig) string {
+func resolveReasoningEffort(model string, thinking *AnthropicThinking, outputConfig *AnthropicOutputConfig) string {
 	if outputConfig != nil && outputConfig.Effort != "" {
 		effort := outputConfig.Effort
-		if effort == "max" {
-			effort = "high" // Responses API doesn't support "max"
+		if effort == "max" && !supportsMaxReasoningEffort(model) {
+			effort = "high"
 		}
 		return effort
 	}
 	return thinkingEffort(thinking)
+}
+
+// supportsMaxReasoningEffort is deliberately allowlisted: sending an unknown
+// effort tier makes the entire upstream request fail. GPT-5.6 Sol advertises
+// max, while older Responses models only accept tiers through high.
+func supportsMaxReasoningEffort(model string) bool {
+	model = strings.ToLower(strings.TrimSpace(model))
+	return model == "gpt-5.6-sol" || strings.HasPrefix(model, "gpt-5.6-sol-")
 }
 
 // thinkingEffort maps Anthropic thinking budget to Responses API effort level.
@@ -35,12 +43,20 @@ func thinkingEffort(thinking *AnthropicThinking) string {
 }
 
 func ConvertAnthropicToResponses(req AnthropicMessagesRequest) (ResponsesRequest, error) {
-	input, err := convertMessagesToResponsesInput(req.Messages, req.Model)
+	// Responses has a dedicated instructions field. Fold top-level Anthropic
+	// system content and any OpenAI-style system messages into that field rather
+	// than dropping them from input history.
+	system, canonicalMessages, err := canonicalizeSystemMessages(req.System, req.Messages)
+	if err != nil {
+		return ResponsesRequest{}, fmt.Errorf("failed to normalize system messages: %w", err)
+	}
+
+	input, err := convertMessagesToResponsesInput(canonicalMessages, req.Model)
 	if err != nil {
 		return ResponsesRequest{}, fmt.Errorf("failed to convert messages: %w", err)
 	}
 
-	instructions := extractSystemText(req.System)
+	instructions := extractSystemText(system)
 	tools := convertToolsToResponsesFormat(req.Tools)
 	toolChoice := convertToolChoiceToResponsesFormat(req.ToolChoice)
 
@@ -64,7 +80,7 @@ func ConvertAnthropicToResponses(req AnthropicMessagesRequest) (ResponsesRequest
 		Stream:            req.Stream,
 		Store:             false,
 		ParallelToolCalls: &ptc,
-		Reasoning:         &ResponseReasoning{Effort: resolveReasoningEffort(req.Thinking, req.OutputConfig), Summary: "detailed"},
+		Reasoning:         &ResponseReasoning{Effort: resolveReasoningEffort(req.Model, req.Thinking, req.OutputConfig), Summary: "detailed"},
 		Include:           []string{"reasoning.encrypted_content"},
 	}
 

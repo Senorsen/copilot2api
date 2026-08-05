@@ -23,6 +23,8 @@
 
 ### Bug Fixes
 
+- Normalize OpenAI-style `system` roles found inside Anthropic `messages`: preserve string/text-block content, merge it with the top-level system instructions, and route it correctly through Chat Completions, Responses, and native Messages instead of returning `unsupported message role: system`
+- Preserve `output_config.effort=max` for GPT-5.6 Sol Responses requests; continue downgrading max to high for models that do not advertise support
 - Serve the dashboard's Chart.js dependency from the embedded control server assets so offline or restricted workstations do not need CDN access
 - Render dashboard filter values safely so model, account, and reasoning-effort labels cannot corrupt the controls
 - Publish Docker images to the current GitHub repository's container package instead of the previous owner's package
