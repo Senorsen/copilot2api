@@ -128,7 +128,11 @@ func TestResolveReasoningEffort(t *testing.T) {
 		{"unsupported model max maps to high", "gpt-5.5", nil, effort("max"), "high"},
 		{"gpt 5.6 sol preserves max", "gpt-5.6-sol", nil, effort("max"), "max"},
 		{"gpt 5.6 sol variant preserves max", "gpt-5.6-sol-2026-08-01", nil, effort("max"), "max"},
-		{"similar model name still downgrades max", "gpt-5.6-solitude", nil, effort("max"), "high"},
+		{"similar model name is still gpt 5.6 so max stays", "gpt-5.6-solitude", nil, effort("max"), "max"},
+		{"newer minor preserves max", "gpt-5.7", nil, effort("max"), "max"},
+		{"newer major preserves max", "gpt-6", nil, effort("max"), "max"},
+		{"older major downgrades max", "gpt-4.9", nil, effort("max"), "high"},
+		{"non gpt model downgrades max", "claude-opus-5", nil, effort("max"), "high"},
 		{"output_config overrides thinking", "test-model", budget(4000), effort("high"), "high"},
 		{"output_config empty falls back to thinking", "test-model", budget(4000), &AnthropicOutputConfig{}, "low"},
 	}

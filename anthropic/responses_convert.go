@@ -3,6 +3,7 @@ package anthropic
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -19,12 +20,54 @@ func resolveReasoningEffort(model string, thinking *AnthropicThinking, outputCon
 	return thinkingEffort(thinking)
 }
 
-// supportsMaxReasoningEffort is deliberately allowlisted: sending an unknown
-// effort tier makes the entire upstream request fail. GPT-5.6 Sol advertises
-// max, while older Responses models only accept tiers through high.
+// maxReasoningEffortMinGPTVersion is the first GPT generation whose Responses
+// models accept the "max" reasoning tier. Older models reject it outright and
+// fail the whole upstream request, so they keep the "high" downgrade.
+var maxReasoningEffortMinGPTVersion = [2]int{5, 6}
+
+// supportsMaxReasoningEffort reports whether a model accepts effort=max. GPT
+// models are compared by version so future releases (gpt-5.7, gpt-6, ...) work
+// without a code change; anything whose version cannot be parsed is treated as
+// unsupported to avoid breaking requests.
 func supportsMaxReasoningEffort(model string) bool {
+	version, ok := parseGPTModelVersion(model)
+	if !ok {
+		return false
+	}
+	if version[0] != maxReasoningEffortMinGPTVersion[0] {
+		return version[0] > maxReasoningEffortMinGPTVersion[0]
+	}
+	return version[1] >= maxReasoningEffortMinGPTVersion[1]
+}
+
+// parseGPTModelVersion extracts the major and minor version of a gpt-* model
+// name, e.g. "gpt-5.6-sol" -> (5, 6) and "gpt-6" -> (6, 0).
+func parseGPTModelVersion(model string) ([2]int, bool) {
 	model = strings.ToLower(strings.TrimSpace(model))
-	return model == "gpt-5.6-sol" || strings.HasPrefix(model, "gpt-5.6-sol-")
+	if idx := strings.LastIndex(model, "/"); idx >= 0 {
+		model = model[idx+1:]
+	}
+	if !strings.HasPrefix(model, "gpt-") {
+		return [2]int{}, false
+	}
+
+	version := strings.TrimPrefix(model, "gpt-")
+	if idx := strings.Index(version, "-"); idx >= 0 {
+		version = version[:idx]
+	}
+
+	majorPart, minorPart, hasMinor := strings.Cut(version, ".")
+	major, err := strconv.Atoi(majorPart)
+	if err != nil {
+		return [2]int{}, false
+	}
+	minor := 0
+	if hasMinor {
+		if minor, err = strconv.Atoi(minorPart); err != nil {
+			return [2]int{}, false
+		}
+	}
+	return [2]int{major, minor}, true
 }
 
 // thinkingEffort maps Anthropic thinking budget to Responses API effort level.
