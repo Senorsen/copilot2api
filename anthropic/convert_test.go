@@ -107,18 +107,18 @@ func TestConvertAnthropicToOpenAI_SystemRolesInMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ConvertAnthropicToOpenAI returned error: %v", err)
 	}
-	if len(got.Messages) != 2 {
-		t.Fatalf("messages = %d, want system + user", len(got.Messages))
+	if len(got.Messages) != 4 {
+		t.Fatalf("messages = %d, want top-level system + two ordered system messages + user", len(got.Messages))
 	}
-	if got.Messages[0].Role != "system" || got.Messages[0].Content == nil || got.Messages[0].Content.Text == nil {
-		t.Fatalf("first message is not a text system message: %+v", got.Messages[0])
-	}
-	want := "top-level\n\nfirst\n\nsecond-a\n\nsecond-b"
-	if *got.Messages[0].Content.Text != want {
-		t.Fatalf("system content = %q, want %q", *got.Messages[0].Content.Text, want)
-	}
-	if got.Messages[1].Role != "user" {
-		t.Fatalf("second role = %q, want user", got.Messages[1].Role)
+	wantRoles := []string{"system", "system", "system", "user"}
+	wantText := []string{"top-level", "first", "second-a\n\nsecond-b", "hello"}
+	for i := range wantRoles {
+		if got.Messages[i].Role != wantRoles[i] || got.Messages[i].Content == nil || got.Messages[i].Content.Text == nil {
+			t.Fatalf("message[%d] = %+v, want text role %q", i, got.Messages[i], wantRoles[i])
+		}
+		if *got.Messages[i].Content.Text != wantText[i] {
+			t.Fatalf("message[%d] text = %q, want %q", i, *got.Messages[i].Content.Text, wantText[i])
+		}
 	}
 }
 

@@ -36,16 +36,10 @@ func ConvertAnthropicToOpenAI(req AnthropicMessagesRequest) (OpenAIChatCompletio
 		}
 	}
 
-	// Anthropic formally permits system only as a top-level field, but some
-	// compatible clients put one or more system roles in messages. Canonicalize
-	// them first so all instructions survive the Chat Completions conversion.
-	system, canonicalMessages, err := canonicalizeSystemMessages(req.System, req.Messages)
-	if err != nil {
-		return openAIReq, fmt.Errorf("failed to normalize system messages: %w", err)
-	}
-
-	// Convert messages
-	messages, err := convertAnthropicMessagesToOpenAI(system, canonicalMessages)
+	// Convert messages. Chat Completions natively accepts system roles, so keep
+	// any in-message system instructions in their original positions rather than
+	// folding them into the top-level prompt and changing conversation order.
+	messages, err := convertAnthropicMessagesToOpenAI(req.System, req.Messages)
 	if err != nil {
 		return openAIReq, fmt.Errorf("failed to convert messages: %w", err)
 	}
@@ -115,6 +109,15 @@ func convertAnthropicMessageToOpenAI(msg AnthropicMessage) ([]OpenAIMessage, err
 		return convertUserMessageToOpenAI(msg)
 	} else if msg.Role == "assistant" {
 		return convertAssistantMessageToOpenAI(msg)
+	} else if msg.Role == "system" {
+		text, err := extractSystemMessageText(msg.Content)
+		if err != nil {
+			return nil, err
+		}
+		return []OpenAIMessage{{
+			Role:    "system",
+			Content: &OpenAIContent{Text: &text},
+		}}, nil
 	}
 
 	return nil, fmt.Errorf("unsupported message role: %s", msg.Role)

@@ -53,7 +53,7 @@ func TestConvertAnthropicToResponses_SimpleText(t *testing.T) {
 	}
 }
 
-func TestConvertAnthropicToResponses_SystemRolesBecomeInstructions(t *testing.T) {
+func TestConvertAnthropicToResponses_PreservesSystemRoleOrder(t *testing.T) {
 	req := AnthropicMessagesRequest{
 		Model:     "gpt-5.6-sol",
 		MaxTokens: 4096,
@@ -72,12 +72,18 @@ func TestConvertAnthropicToResponses_SystemRolesBecomeInstructions(t *testing.T)
 	if err != nil {
 		t.Fatalf("ConvertAnthropicToResponses returned error: %v", err)
 	}
-	want := "top-level\n\nfirst\n\nsecond-a\n\nsecond-b"
-	if got.Instructions == nil || *got.Instructions != want {
-		t.Fatalf("instructions = %v, want %q", got.Instructions, want)
+	if got.Instructions == nil || *got.Instructions != "top-level" {
+		t.Fatalf("instructions = %v, want only the top-level system", got.Instructions)
 	}
-	if len(got.Input) != 1 || got.Input[0].Role != "user" {
-		t.Fatalf("input = %+v, want only the user message", got.Input)
+	if len(got.Input) != 3 {
+		t.Fatalf("input length = %d, want two ordered system messages + user", len(got.Input))
+	}
+	wantRoles := []string{"system", "system", "user"}
+	wantContent := []string{"first", "second-a\n\nsecond-b", "hello"}
+	for i := range wantRoles {
+		if got.Input[i].Role != wantRoles[i] || got.Input[i].Content != wantContent[i] {
+			t.Fatalf("input[%d] = %+v, want role=%q content=%q", i, got.Input[i], wantRoles[i], wantContent[i])
+		}
 	}
 }
 

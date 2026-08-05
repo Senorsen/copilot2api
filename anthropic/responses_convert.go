@@ -43,20 +43,15 @@ func thinkingEffort(thinking *AnthropicThinking) string {
 }
 
 func ConvertAnthropicToResponses(req AnthropicMessagesRequest) (ResponsesRequest, error) {
-	// Responses has a dedicated instructions field. Fold top-level Anthropic
-	// system content and any OpenAI-style system messages into that field rather
-	// than dropping them from input history.
-	system, canonicalMessages, err := canonicalizeSystemMessages(req.System, req.Messages)
-	if err != nil {
-		return ResponsesRequest{}, fmt.Errorf("failed to normalize system messages: %w", err)
-	}
-
-	input, err := convertMessagesToResponsesInput(canonicalMessages, req.Model)
+	// Responses natively accepts system input messages. Keep those messages in
+	// their original positions; only Anthropic's separate top-level system field
+	// maps to Responses' top-level instructions.
+	input, err := convertMessagesToResponsesInput(req.Messages, req.Model)
 	if err != nil {
 		return ResponsesRequest{}, fmt.Errorf("failed to convert messages: %w", err)
 	}
 
-	instructions := extractSystemText(system)
+	instructions := extractSystemText(req.System)
 	tools := convertToolsToResponsesFormat(req.Tools)
 	toolChoice := convertToolChoiceToResponsesFormat(req.ToolChoice)
 
@@ -107,8 +102,14 @@ func convertMessageToResponsesInputItems(msg AnthropicMessage, model string) ([]
 		return convertUserMessageToResponsesInput(msg)
 	case "assistant":
 		return convertAssistantMessageToResponsesInput(msg, model)
+	case "system":
+		text, err := extractSystemMessageText(msg.Content)
+		if err != nil {
+			return nil, err
+		}
+		return []ResponseInputItem{{Type: "message", Role: "system", Content: text}}, nil
 	default:
-		return nil, fmt.Errorf("unsupported message role: %q (expected \"user\" or \"assistant\")", msg.Role)
+		return nil, fmt.Errorf("unsupported message role: %q (expected \"system\", \"user\", or \"assistant\")", msg.Role)
 	}
 }
 
