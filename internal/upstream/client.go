@@ -78,7 +78,7 @@ const (
 	defaultNonStreamTimeout = 5 * time.Minute
 	maxErrBody              = 1 << 20  // 1MB for error bodies
 	maxRespBody             = 50 << 20 // 50MB for response bodies
-	MaxRequestBody          = 10 << 20 // 10MB for incoming request bodies
+	MaxRequestBody          = 100 << 20 // 100MB for incoming request bodies
 )
 
 // Do executes a request against the upstream Copilot API.

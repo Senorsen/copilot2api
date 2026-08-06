@@ -685,7 +685,7 @@ func (h *Handler) HandleUsage(w http.ResponseWriter, r *http.Request) {
 
 // handleEmbeddings normalizes input to array format before proxying
 func (h *Handler) handleEmbeddings(w http.ResponseWriter, r *http.Request, usage *proxyTokenUsage) {
-	r.Body = http.MaxBytesReader(w, r.Body, upstream.MaxRequestBody) // 10MB limit
+	r.Body = http.MaxBytesReader(w, r.Body, upstream.MaxRequestBody)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, "Failed to read request body")
