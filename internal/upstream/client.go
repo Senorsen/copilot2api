@@ -76,8 +76,8 @@ type Request struct {
 
 const (
 	defaultNonStreamTimeout = 5 * time.Minute
-	maxErrBody              = 1 << 20  // 1MB for error bodies
-	maxRespBody             = 50 << 20 // 50MB for response bodies
+	maxErrBody              = 1 << 20   // 1MB for error bodies
+	maxRespBody             = 50 << 20  // 50MB for response bodies
 	MaxRequestBody          = 100 << 20 // 100MB for incoming request bodies
 )
 
