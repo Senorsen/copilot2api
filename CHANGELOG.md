@@ -23,6 +23,7 @@
 
 ### Bug Fixes
 
+- Log the decoded dimensions, format, and media type of inline images when upstream rejects a request because of an image, so the offending message can be identified without reproducing the request
 - Preserve OpenAI-style `system` roles found inside Anthropic `messages` when routing to Chat Completions or Responses: retain each message's original position and string/text-block content instead of returning `unsupported message role: system`; native Anthropic passthrough remains standards-compliant and accepts system only via the top-level field
 - Preserve `output_config.effort=max` for Responses models from GPT-5.6 onward, comparing model versions so newer releases work without a code change; continue downgrading max to high for older models
 - Serve the dashboard's Chart.js dependency from the embedded control server assets so offline or restricted workstations do not need CDN access

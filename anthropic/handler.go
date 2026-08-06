@@ -259,7 +259,7 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 		if err != nil {
 			var upstreamErr *upstream.UpstreamError
 			if errors.As(err, &upstreamErr) {
-				h.writeRawUpstreamError(w, upstreamErr)
+				h.writeRawUpstreamError(w, upstreamErr, body)
 				return
 			}
 			upstream.LogRequestError("native /messages streaming request failed", err)
@@ -342,7 +342,7 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
-			h.writeRawUpstreamError(w, upstreamErr)
+			h.writeRawUpstreamError(w, upstreamErr, body)
 			return
 		}
 		upstream.LogRequestError("native /messages request failed", err)
@@ -853,12 +853,22 @@ func (h *Handler) mapUpstreamError(upstreamErr *upstream.UpstreamError) (string,
 	return anthropicErrorType, message
 }
 
-func (h *Handler) writeRawUpstreamError(w http.ResponseWriter, upstreamErr *upstream.UpstreamError) {
+func (h *Handler) writeRawUpstreamError(w http.ResponseWriter, upstreamErr *upstream.UpstreamError, reqBody []byte) {
 	body := string(upstreamErr.Body)
-	if len(body) > 150 {
-		body = body[:150]
+	if len(body) > 600 {
+		body = body[:600]
 	}
-	slog.Warn("anthropic upstream error (raw passthrough)", "status", upstreamErr.StatusCode, "body", body)
+	attrs := []any{"status", upstreamErr.StatusCode, "body", body}
+	// Upstream names the rejected message index but not what is wrong with the
+	// image, so decode the request's images to show their real dimensions.
+	if upstreamRejectedImages(upstreamErr.Body) {
+		if diags := describeRequestImages(reqBody); len(diags) > 0 {
+			if encoded, err := json.Marshal(diags); err == nil {
+				attrs = append(attrs, "images", string(encoded))
+			}
+		}
+	}
+	slog.Warn("anthropic upstream error (raw passthrough)", attrs...)
 	upstreamErr.WriteRawError(w)
 }
 
