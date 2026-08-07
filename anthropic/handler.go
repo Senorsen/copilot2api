@@ -255,18 +255,45 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 	// Force the 1M context beta header for capable models, merging with any beta the client already sent.
 	beta1m := mergeContext1MBeta(model, r.Header.Get("anthropic-beta"))
 	if stream {
-		resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: body, Stream: true, QueryString: r.URL.RawQuery, ExtraHeaders: beta1m})
+		doStream := func(b []byte) (*http.Response, error) {
+			resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: b, Stream: true, QueryString: r.URL.RawQuery, ExtraHeaders: beta1m})
+			return resp, err
+		}
+
+		resp, err := doStream(body)
 		if err != nil {
 			var upstreamErr *upstream.UpstreamError
-			if errors.As(err, &upstreamErr) {
+			if !errors.As(err, &upstreamErr) {
+				upstream.LogRequestError("native /messages streaming request failed", err)
+				sse.BeginSSE(w)
+				w.WriteHeader(http.StatusBadGateway)
+				h.writeSSEError(w, "Upstream streaming request failed")
+				return
+			}
+
+			// A stale thinking signature poisons every subsequent turn, because
+			// the client keeps replaying the same history. Retry once without
+			// the offending signatures rather than leaving the conversation
+			// permanently broken.
+			repaired, retry := retryWithoutThinkingSignatures(body, upstreamErr.Body, "/v1/messages")
+			if !retry {
 				h.writeRawUpstreamError(w, upstreamErr, body)
 				return
 			}
-			upstream.LogRequestError("native /messages streaming request failed", err)
-			sse.BeginSSE(w)
-			w.WriteHeader(http.StatusBadGateway)
-			h.writeSSEError(w, "Upstream streaming request failed")
-			return
+
+			body = repaired
+			resp, err = doStream(body)
+			if err != nil {
+				if errors.As(err, &upstreamErr) {
+					h.writeRawUpstreamError(w, upstreamErr, body)
+					return
+				}
+				upstream.LogRequestError("native /messages streaming retry failed", err)
+				sse.BeginSSE(w)
+				w.WriteHeader(http.StatusBadGateway)
+				h.writeSSEError(w, "Upstream streaming request failed")
+				return
+			}
 		}
 		defer resp.Body.Close()
 
@@ -342,12 +369,28 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
-			h.writeRawUpstreamError(w, upstreamErr, body)
+			// See the streaming path: retry once with the invalid thinking
+			// signatures removed before surfacing a fatal error.
+			if repaired, retry := retryWithoutThinkingSignatures(body, upstreamErr.Body, "/v1/messages"); retry {
+				_, respData, err = h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: repaired, QueryString: r.URL.RawQuery, ExtraHeaders: beta1m})
+				if err != nil {
+					if errors.As(err, &upstreamErr) {
+						h.writeRawUpstreamError(w, upstreamErr, repaired)
+						return
+					}
+					upstream.LogRequestError("native /messages retry failed", err)
+					WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream request failed")
+					return
+				}
+			} else {
+				h.writeRawUpstreamError(w, upstreamErr, body)
+				return
+			}
+		} else {
+			upstream.LogRequestError("native /messages request failed", err)
+			WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream request failed")
 			return
 		}
-		upstream.LogRequestError("native /messages request failed", err)
-		WriteAnthropicError(w, http.StatusInternalServerError, AnthropicErrorTypeAPI, "Upstream request failed")
-		return
 	}
 
 	// Extract usage from non-streaming native response
