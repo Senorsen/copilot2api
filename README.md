@@ -317,7 +317,7 @@ Add to `~/.claude/settings.json`:
 
 ### 1M Context Window
 
-When Claude Code sends the `anthropic-beta: context-1m-...` header, copilot2api automatically appends `-1m` to the model ID (e.g. `claude-opus-4.6` → `claude-opus-4.6-1m`). Select `Opus (1M)` via `/model` in Claude Code to activate it.
+Capable Claude models (opus/sonnet 4.6+) always get the `anthropic-beta: context-1m-2025-08-07` header injected upstream, so requests use the full 1M context window instead of falling back to the 200k limit. Any client-supplied `anthropic-beta` value is merged rather than replaced.
 
 ### Thinking Mode
 

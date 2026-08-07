@@ -9,10 +9,15 @@ import (
 
 // resolveReasoningEffort determines the reasoning effort level for the Responses API.
 // OutputConfig.Effort takes priority when set; otherwise falls back to thinking budget.
+// Effort strings are forwarded verbatim — the upstream model's
+// capabilities.supports.reasoning_effort enum is the source of truth for what's
+// accepted (e.g. xhigh on GPT-5, max on Anthropic, minimal on Gemini Flash).
+// The one exception is "max" on GPT models older than gpt-5.6, which reject it
+// outright and fail the whole upstream request (see supportsMaxReasoningEffort).
 func resolveReasoningEffort(model string, thinking *AnthropicThinking, outputConfig *AnthropicOutputConfig) string {
 	if outputConfig != nil && outputConfig.Effort != "" {
 		effort := outputConfig.Effort
-		if effort == "max" && !supportsMaxReasoningEffort(model) {
+		if effort == "max" && isGPTModel(model) && !supportsMaxReasoningEffort(model) {
 			effort = "high"
 		}
 		return effort
@@ -38,6 +43,14 @@ func supportsMaxReasoningEffort(model string) bool {
 		return version[0] > maxReasoningEffortMinGPTVersion[0]
 	}
 	return version[1] >= maxReasoningEffortMinGPTVersion[1]
+}
+
+// isGPTModel reports whether the model id looks like a gpt-* Responses model.
+// Only those models have the "max" restriction; other vendors (Anthropic,
+// Gemini) declare their own effort enums and get the value verbatim.
+func isGPTModel(model string) bool {
+	_, ok := parseGPTModelVersion(model)
+	return ok
 }
 
 // parseGPTModelVersion extracts the major and minor version of a gpt-* model

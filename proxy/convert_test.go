@@ -219,17 +219,44 @@ func TestConvertChatToResponsesRequest_ThinkingBudget(t *testing.T) {
 	}
 }
 
+func TestConvertChatToResponsesRequest_ReasoningEffort(t *testing.T) {
+	// reasoning_effort is forwarded verbatim, including modern values
+	// (xhigh, minimal, none) that the legacy budget bucketing can't produce.
+	efforts := []string{"low", "medium", "high", "xhigh", "minimal", "none", "max"}
+
+	for _, effort := range efforts {
+		e := effort
+		req := types.OpenAIChatCompletionsRequest{
+			Model:           "gpt-5.5",
+			ReasoningEffort: &e,
+		}
+
+		result := ConvertChatToResponsesRequest(req)
+
+		if result.Reasoning == nil {
+			t.Fatalf("effort=%q: Reasoning should not be nil", effort)
+		}
+		if result.Reasoning.Effort != effort {
+			t.Errorf("effort=%q: Effort = %q, want %q", effort, result.Reasoning.Effort, effort)
+		}
+		if result.Reasoning.Summary != "detailed" {
+			t.Errorf("effort=%q: Summary = %q, want detailed", effort, result.Reasoning.Summary)
+		}
+	}
+}
+
 func TestConvertChatToResponsesRequest_ReasoningEffortPrecedence(t *testing.T) {
 	lowBudget := 1
 	tests := []struct {
 		name     string
-		explicit string
+		explicit *string
 		budget   *int
 		want     string
 	}{
-		{name: "explicit effort", explicit: "xhigh", want: "xhigh"},
-		{name: "arbitrary explicit effort", explicit: " Custom-Tier ", want: "custom-tier"},
-		{name: "explicit overrides budget", explicit: "minimal", budget: &lowBudget, want: "minimal"},
+		{name: "explicit effort", explicit: strPtr("xhigh"), want: "xhigh"},
+		{name: "arbitrary explicit effort forwarded verbatim", explicit: strPtr(" Custom-Tier "), want: "Custom-Tier"},
+		{name: "explicit overrides budget", explicit: strPtr("minimal"), budget: &lowBudget, want: "minimal"},
+		{name: "blank explicit falls back to budget", explicit: strPtr("  "), budget: &lowBudget, want: "low"},
 		{name: "budget fallback", budget: &lowBudget, want: "low"},
 	}
 
@@ -399,30 +426,28 @@ func TestConvertResponsesToChatRequest_TemperatureZero(t *testing.T) {
 }
 
 func TestConvertResponsesToChatRequest_Reasoning(t *testing.T) {
-	tests := []struct {
-		effort string
-		budget int
-	}{
-		{"high", 32000},
-		{"medium", 12000},
-		{"low", 4000},
-	}
+	// Effort is forwarded verbatim, including values the legacy budget
+	// bucketing couldn't represent (xhigh, max, minimal, none).
+	efforts := []string{"low", "medium", "high", "xhigh", "max", "minimal", "none"}
 
-	for _, tt := range tests {
+	for _, effort := range efforts {
 		req := types.ResponsesRequest{
 			Model: "gpt-4",
 			Reasoning: &types.ResponseReasoning{
-				Effort: tt.effort,
+				Effort: effort,
 			},
 		}
 
 		result := ConvertResponsesToChatRequest(req)
 
-		if result.ThinkingBudget == nil {
-			t.Fatalf("effort=%q: ThinkingBudget should not be nil", tt.effort)
+		if result.ReasoningEffort == nil {
+			t.Fatalf("effort=%q: ReasoningEffort should not be nil", effort)
 		}
-		if *result.ThinkingBudget != tt.budget {
-			t.Errorf("effort=%q: ThinkingBudget = %d, want %d", tt.effort, *result.ThinkingBudget, tt.budget)
+		if *result.ReasoningEffort != effort {
+			t.Errorf("effort=%q: ReasoningEffort = %q, want %q", effort, *result.ReasoningEffort, effort)
+		}
+		if result.ThinkingBudget != nil {
+			t.Errorf("effort=%q: ThinkingBudget should not be set when forwarding effort verbatim, got %d", effort, *result.ThinkingBudget)
 		}
 	}
 }

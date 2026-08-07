@@ -256,8 +256,6 @@ func main() {
 	gwHandler.Recorder = recorder
 	mux.Handle("/gw/api/", gwHandler)
 
-
-
 	// Usage endpoint (aggregates all accounts)
 	mux.HandleFunc("/usage", func(w http.ResponseWriter, r *http.Request) {
 		// Pick first available account for usage
@@ -271,7 +269,6 @@ func main() {
 		proxyHandler := proxy.NewHandler(tp, transport, modelsCache, &aggregateUsageProvider{am: accountManager})
 		proxyHandler.HandleUsage(w, r)
 	})
-
 
 	// Create proxy server with optional API_TOKEN auth
 	var proxyHandler http.Handler = logAllRequests(mux)

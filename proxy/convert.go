@@ -78,10 +78,18 @@ func ConvertChatToResponsesRequest(req types.OpenAIChatCompletionsRequest) types
 		result.MaxOutputTokens = &v
 	}
 
-	// Explicit reasoning effort takes precedence over the legacy budget.
-	if strings.TrimSpace(req.ReasoningEffort) != "" || req.ThinkingBudget != nil {
+	// Reasoning effort: prefer the modern enum string when the client sends
+	// it directly and forward it verbatim (per-model enums vary upstream).
+	// Fall back to bucketing thinking_budget for older clients that only know
+	// the numeric field.
+	if req.ReasoningEffort != nil && strings.TrimSpace(*req.ReasoningEffort) != "" {
 		result.Reasoning = &types.ResponseReasoning{
-			Effort:  stats.ClassifyReasoningEffort(req.ReasoningEffort, req.ThinkingBudget),
+			Effort:  strings.TrimSpace(*req.ReasoningEffort),
+			Summary: "detailed",
+		}
+	} else if req.ThinkingBudget != nil {
+		result.Reasoning = &types.ResponseReasoning{
+			Effort:  stats.ClassifyReasoningEffort("", req.ThinkingBudget),
 			Summary: "detailed",
 		}
 	}
@@ -505,10 +513,12 @@ func ConvertResponsesToChatRequest(req types.ResponsesRequest) types.OpenAIChatC
 		result.MaxTokens = &v
 	}
 
-	// Reasoning → thinking budget
-	if req.Reasoning != nil {
-		budget := effortToThinkingBudget(req.Reasoning.Effort)
-		result.ThinkingBudget = &budget
+	// Reasoning effort: forward the enum string directly. Chat Completions
+	// accepts reasoning_effort natively, so we don't bucket it back into the
+	// lossy thinking_budget representation.
+	if req.Reasoning != nil && req.Reasoning.Effort != "" {
+		effort := req.Reasoning.Effort
+		result.ReasoningEffort = &effort
 	}
 
 	// text.format → response_format

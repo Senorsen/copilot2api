@@ -16,6 +16,8 @@
 - Dashboard: API key required for usage data (stored in localStorage), bar top labels with overlap avoidance, bottom dimension labels at 60°
 - Add reasoning-effort usage tracking and filtering, including a combinable dashboard dimension for recorded OpenAI-compatible and Anthropic traffic
 - Dashboard: show the running binary's short git commit next to the page title
+- Forward `reasoning_effort` verbatim on OpenAI `/v1/chat/completions` requests instead of dropping it during smart-routing to `/responses`. Values like `xhigh`, `minimal`, and `none` now reach the model — accept any string and let upstream validate against the per-model `capabilities.supports.reasoning_effort` enum
+- Honor `output_config.effort` on Anthropic `/v1/messages` requests routed to OpenAI Chat Completions, in addition to the existing Responses path
 
 ### Docs
 
@@ -25,10 +27,11 @@
 
 - Log the decoded dimensions, format, and media type of inline images when upstream rejects a request because of an image, so the offending message can be identified without reproducing the request
 - Preserve OpenAI-style `system` roles found inside Anthropic `messages` when routing to Chat Completions or Responses: retain each message's original position and string/text-block content instead of returning `unsupported message role: system`; native Anthropic passthrough remains standards-compliant and accepts system only via the top-level field
-- Preserve `output_config.effort=max` for Responses models from GPT-5.6 onward, comparing model versions so newer releases work without a code change; continue downgrading max to high for older models
+- Preserve `output_config.effort=max` for Responses models from GPT-5.6 onward, comparing model versions so newer releases work without a code change; only older GPT models still downgrade max to high (non-GPT models get the effort verbatim)
 - Serve the dashboard's Chart.js dependency from the embedded control server assets so offline or restricted workstations do not need CDN access
 - Render dashboard filter values safely so model, account, and reasoning-effort labels cannot corrupt the controls
 - Publish Docker images to the current GitHub repository's container package instead of the previous owner's package
+- Stop bucketing OpenAI Responses `reasoning.effort` into the lossy `thinking_budget` numeric when smart-routing to `/chat/completions`; forward the effort string directly
 
 ## [0.3.1] - 2026-04-26
 
