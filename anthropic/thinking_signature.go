@@ -3,6 +3,8 @@ package anthropic
 import (
 	"encoding/json"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -31,6 +33,24 @@ func invalidThinkingSignature(body []byte) bool {
 	return strings.Contains(lower, "signature") && strings.Contains(lower, "thinking")
 }
 
+// signaturePathPattern captures the message index named in errors such as
+// "messages.1.content.37: Invalid `signature` in `thinking` block".
+var signaturePathPattern = regexp.MustCompile(`messages\.(\d+)\.`)
+
+// offendingMessageIndex returns the message index named in the upstream error,
+// or -1 when the error does not identify one.
+func offendingMessageIndex(body []byte) int {
+	m := signaturePathPattern.FindStringSubmatch(upstreamErrorMessage(body))
+	if m == nil {
+		return -1
+	}
+	idx, err := strconv.Atoi(m[1])
+	if err != nil {
+		return -1
+	}
+	return idx
+}
+
 // upstreamErrorMessage pulls error.message out of an Anthropic error body.
 func upstreamErrorMessage(body []byte) string {
 	var parsed struct {
@@ -44,14 +64,19 @@ func upstreamErrorMessage(body []byte) string {
 	return parsed.Error.Message
 }
 
-// stripThinkingSignatures removes the signature field from every thinking
-// block in a native /v1/messages request body, returning the rewritten body
-// and how many signatures were dropped.
+// stripThinkingSignatures removes the signature field from thinking blocks in
+// a native /v1/messages request body, returning the rewritten body and how
+// many signatures were dropped.
+//
+// When msgIndex is >= 0 only that message is repaired, which is what the
+// upstream error identifies. Anthropic reports just the first offending block,
+// so a caller that still gets rejected can widen the scope by passing -1 to
+// clear every message.
 //
 // The body is walked as generic JSON rather than through the typed request
 // structs: this path is a verbatim passthrough, and round-tripping it through
 // our own types would silently drop any field we do not model.
-func stripThinkingSignatures(body []byte) ([]byte, int) {
+func stripThinkingSignatures(body []byte, msgIndex int) ([]byte, int) {
 	var root map[string]any
 	if err := json.Unmarshal(body, &root); err != nil {
 		return body, 0
@@ -63,7 +88,10 @@ func stripThinkingSignatures(body []byte) ([]byte, int) {
 	}
 
 	removed := 0
-	for _, m := range messages {
+	for i, m := range messages {
+		if msgIndex >= 0 && i != msgIndex {
+			continue
+		}
 		msg, ok := m.(map[string]any)
 		if !ok {
 			continue
@@ -103,15 +131,29 @@ func stripThinkingSignatures(body []byte) ([]byte, int) {
 // retryWithoutThinkingSignatures returns a repaired body when the upstream
 // error is an invalid thinking signature and at least one signature could be
 // removed. The second result reports whether a retry is worth attempting.
+//
+// Repair is scoped to the message the upstream error names, so signatures on
+// unrelated turns are left intact. Only when the error names no message (or
+// that message turns out to hold no signature) does it fall back to clearing
+// every one, which is still preferable to a conversation that can never
+// recover.
 func retryWithoutThinkingSignatures(body, errBody []byte, endpoint string) ([]byte, bool) {
 	if !invalidThinkingSignature(errBody) {
 		return nil, false
 	}
 
-	repaired, removed := stripThinkingSignatures(body)
+	idx := offendingMessageIndex(errBody)
+	repaired, removed := stripThinkingSignatures(body, idx)
+	scope := "message " + strconv.Itoa(idx)
+
+	if removed == 0 && idx >= 0 {
+		// The named message held nothing to strip, so fall back to a full sweep
+		// rather than replaying an identical request.
+		repaired, removed = stripThinkingSignatures(body, -1)
+		scope = "all messages (fallback)"
+	}
+
 	if removed == 0 {
-		// The error named a signature we cannot find; retrying unchanged would
-		// just fail identically.
 		slog.Warn("upstream rejected a thinking signature but none were found to strip",
 			"endpoint", endpoint,
 			"upstream_error", upstreamErrorMessage(errBody))
@@ -120,6 +162,7 @@ func retryWithoutThinkingSignatures(body, errBody []byte, endpoint string) ([]by
 
 	slog.Warn("stripped invalid thinking signatures and retrying",
 		"endpoint", endpoint,
+		"scope", scope,
 		"signatures_removed", removed,
 		"upstream_error", upstreamErrorMessage(errBody))
 	return repaired, true

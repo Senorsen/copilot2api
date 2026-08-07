@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -45,7 +46,7 @@ func TestStripThinkingSignaturesRemovesOnlySignatures(t *testing.T) {
 		]
 	}`)
 
-	out, removed := stripThinkingSignatures(body)
+	out, removed := stripThinkingSignatures(body, -1)
 	if removed != 1 {
 		t.Fatalf("removed = %d, want 1", removed)
 	}
@@ -79,17 +80,93 @@ func TestStripThinkingSignaturesRemovesOnlySignatures(t *testing.T) {
 	}
 }
 
+func TestOffendingMessageIndex(t *testing.T) {
+	if got := offendingMessageIndex([]byte(realRejection)); got != 1 {
+		t.Errorf("index = %d, want 1 (from messages.1.content.37)", got)
+	}
+	if got := offendingMessageIndex([]byte(`{"error":{"message":"messages.12.content.3: Invalid ` + "`signature`" + `"}}`)); got != 12 {
+		t.Errorf("index = %d, want 12", got)
+	}
+	if got := offendingMessageIndex([]byte(`{"error":{"message":"something went wrong"}}`)); got != -1 {
+		t.Errorf("index = %d, want -1 when no message is named", got)
+	}
+}
+
+func TestStripThinkingSignaturesScopedToOneMessage(t *testing.T) {
+	// Signatures on turns the upstream did not complain about must survive, so
+	// unrelated reasoning context is not discarded.
+	body := []byte(`{"messages":[
+		{"role":"assistant","content":[{"type":"thinking","signature":"keep-0"}]},
+		{"role":"assistant","content":[{"type":"thinking","signature":"drop-1"}]},
+		{"role":"assistant","content":[{"type":"thinking","signature":"keep-2"}]}
+	]}`)
+
+	out, removed := stripThinkingSignatures(body, 1)
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(out, &root); err != nil {
+		t.Fatal(err)
+	}
+	msgs := root["messages"].([]any)
+
+	sig := func(i int) any {
+		blocks := msgs[i].(map[string]any)["content"].([]any)
+		return blocks[0].(map[string]any)["signature"]
+	}
+	if sig(0) != "keep-0" || sig(2) != "keep-2" {
+		t.Error("signatures on unaffected messages must be preserved")
+	}
+	if sig(1) != nil {
+		t.Error("signature on the named message should have been removed")
+	}
+}
+
+func TestRetryScopesToNamedMessageThenWidens(t *testing.T) {
+	// The named message carries the bad signature: only it should be touched.
+	scoped := []byte(`{"messages":[
+		{"role":"assistant","content":[{"type":"thinking","signature":"keep"}]},
+		{"role":"assistant","content":[{"type":"thinking","signature":"bad"}]}
+	]}`)
+	repaired, ok := retryWithoutThinkingSignatures(scoped, []byte(realRejection), "/v1/messages")
+	if !ok {
+		t.Fatal("expected a retry")
+	}
+	if !bytes.Contains(repaired, []byte("keep")) {
+		t.Error("signature outside the named message should be preserved")
+	}
+	if bytes.Contains(repaired, []byte("bad")) {
+		t.Error("signature in the named message should be removed")
+	}
+
+	// The named message holds no signature (e.g. indices shifted): fall back to
+	// clearing everything rather than replaying an identical request.
+	shifted := []byte(`{"messages":[
+		{"role":"assistant","content":[{"type":"thinking","signature":"only-here"}]},
+		{"role":"user","content":[{"type":"text","text":"hi"}]}
+	]}`)
+	repaired, ok = retryWithoutThinkingSignatures(shifted, []byte(realRejection), "/v1/messages")
+	if !ok {
+		t.Fatal("expected a fallback retry")
+	}
+	if bytes.Contains(repaired, []byte("only-here")) {
+		t.Error("fallback should have cleared every signature")
+	}
+}
+
 func TestStripThinkingSignaturesHandlesMultipleAndAbsent(t *testing.T) {
 	multi := []byte(`{"messages":[
 		{"role":"assistant","content":[{"type":"thinking","signature":"a"}]},
 		{"role":"assistant","content":[{"type":"thinking","signature":"b"}]}
 	]}`)
-	if _, removed := stripThinkingSignatures(multi); removed != 2 {
+	if _, removed := stripThinkingSignatures(multi, -1); removed != 2 {
 		t.Errorf("removed = %d, want 2", removed)
 	}
 
 	none := []byte(`{"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
-	out, removed := stripThinkingSignatures(none)
+	out, removed := stripThinkingSignatures(none, -1)
 	if removed != 0 {
 		t.Errorf("removed = %d, want 0", removed)
 	}
@@ -109,7 +186,7 @@ func TestStripThinkingSignaturesToleratesMalformedBodies(t *testing.T) {
 		[]byte(`{}`),
 	}
 	for _, body := range cases {
-		out, removed := stripThinkingSignatures(body)
+		out, removed := stripThinkingSignatures(body, -1)
 		if removed != 0 {
 			t.Errorf("%s: removed = %d, want 0", body, removed)
 		}
