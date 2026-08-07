@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -156,6 +157,52 @@ func stripThinkingSignatures(body []byte, msgIdx, blockIdx int) ([]byte, int) {
 	return rewritten, removed
 }
 
+// describeBlockTarget explains why the block upstream named was left in place.
+// Without this the "could not be dropped" warning gives nothing to act on: the
+// cause could be message shape, block type, a protected position, or indices
+// that do not line up with the body we hold.
+func describeBlockTarget(body []byte, msgIdx, blockIdx int) string {
+	var root map[string]any
+	if err := json.Unmarshal(body, &root); err != nil {
+		return "body is not JSON"
+	}
+	messages, ok := root["messages"].([]any)
+	if !ok {
+		return "no messages array"
+	}
+	if msgIdx >= len(messages) {
+		return fmt.Sprintf("message index out of range (have %d)", len(messages))
+	}
+	if protectedAssistantIndex(messages) == msgIdx {
+		return "message is the trailing assistant turn, which must keep its thinking block"
+	}
+	msg, ok := messages[msgIdx].(map[string]any)
+	if !ok {
+		return "message is not an object"
+	}
+	blocks, ok := msg["content"].([]any)
+	if !ok {
+		return fmt.Sprintf("content is %T, not a block list", msg["content"])
+	}
+	if blockIdx >= len(blocks) {
+		return fmt.Sprintf("block index out of range (message has %d blocks)", len(blocks))
+	}
+	if len(blocks) == 1 {
+		return "removing the only block would leave an empty message"
+	}
+	block, ok := blocks[blockIdx].(map[string]any)
+	if !ok {
+		return "block is not an object"
+	}
+	if block["type"] != "thinking" {
+		return fmt.Sprintf("block type is %v, not thinking", block["type"])
+	}
+	if _, present := block["signature"]; !present {
+		return "thinking block carries no signature field"
+	}
+	return "unknown"
+}
+
 // protectedAssistantIndex returns the index of a trailing assistant message
 // that must keep its thinking blocks, or -1 when none is protected.
 //
@@ -214,6 +261,7 @@ func retryWithoutThinkingSignatures(body, errBody []byte, endpoint string) ([]by
 			"endpoint", endpoint,
 			"message_index", msgIdx,
 			"block_index", blockIdx,
+			"reason", describeBlockTarget(body, msgIdx, blockIdx),
 			"upstream_error", upstreamErrorMessage(errBody))
 		return nil, false
 	}
