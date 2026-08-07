@@ -28,7 +28,8 @@ func contentTypes(t *testing.T, obj map[string]any, msgIdx int) []string {
 
 // This mirrors the shape observed in the Claude Code session captured on
 // 2026-08-07: a history turn holding signature-only thinking blocks alongside
-// real content, which is what upstream rejected.
+// real content, which is what upstream rejected. No tool_use here, so the turn
+// is eligible for stripping.
 func TestDropsSignatureOnlyThinkingFromHistory(t *testing.T) {
 	obj := decode(t, `{
 		"messages": [
@@ -36,24 +37,17 @@ func TestDropsSignatureOnlyThinkingFromHistory(t *testing.T) {
 			{"role":"assistant","content":[
 				{"type":"thinking","thinking":"","signature":"CAISoAgKhwEIEBgC"},
 				{"type":"thinking","thinking":"","signature":"CAISoAgKhwEIEBgD"},
-				{"type":"text","text":"answer"},
-				{"type":"tool_use","id":"t1","name":"Read","input":{}}
+				{"type":"text","text":"answer"}
 			]},
-			{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1"}]}
+			{"role":"user","content":[{"type":"text","text":"next"}]}
 		]
 	}`)
 
 	stripEmptyThinkingBlocks(obj)
 
 	got := contentTypes(t, obj, 1)
-	want := []string{"text", "tool_use"}
-	if len(got) != len(want) {
-		t.Fatalf("content = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("content = %v, want %v", got, want)
-		}
+	if len(got) != 1 || got[0] != "text" {
+		t.Fatalf("content = %v, want only the text block", got)
 	}
 }
 
@@ -176,5 +170,29 @@ func TestNormalizeAppliesTheStrip(t *testing.T) {
 	}
 	if got := contentTypes(t, obj, 1); len(got) != 1 || got[0] != "text" {
 		t.Errorf("content = %v, want only the text block", got)
+	}
+}
+
+func TestKeepsToolUseTurnsIntact(t *testing.T) {
+	// Claude Code is an agentic loop: nearly every historical assistant turn
+	// calls a tool. Upstream validates that a tool-calling turn still carries
+	// its thinking, so stripping there breaks the loop and the model stops
+	// early rather than continuing.
+	obj := decode(t, `{
+		"messages": [
+			{"role":"user","content":[{"type":"text","text":"hi"}]},
+			{"role":"assistant","content":[
+				{"type":"thinking","thinking":"","signature":"sig"},
+				{"type":"tool_use","id":"t1","name":"Read","input":{}}
+			]},
+			{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1"}]},
+			{"role":"user","content":[{"type":"text","text":"next"}]}
+		]
+	}`)
+
+	stripEmptyThinkingBlocks(obj)
+
+	if got := contentTypes(t, obj, 1); len(got) != 2 || got[0] != "thinking" {
+		t.Errorf("content = %v, want the tool_use turn left intact", got)
 	}
 }

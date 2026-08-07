@@ -21,6 +21,9 @@ import (
 // only by failing verification.
 //
 // Two cases are deliberately preserved:
+//   - any assistant message containing tool_use, because upstream validates
+//     that a tool-calling turn still carries its thinking; stripping there
+//     breaks the agentic loop and the model stops early instead of continuing
 //   - the trailing assistant message, which must still begin with a thinking
 //     block while thinking is enabled
 //   - a message's sole block, since emptying the content list would make the
@@ -46,6 +49,9 @@ func stripEmptyThinkingBlocks(obj map[string]any) {
 		if !ok || len(blocks) <= 1 {
 			continue
 		}
+		if containsToolUse(blocks) {
+			continue
+		}
 
 		kept := make([]any, 0, len(blocks))
 		for _, b := range blocks {
@@ -68,6 +74,17 @@ func stripEmptyThinkingBlocks(obj map[string]any) {
 		slog.Info("dropped historical thinking blocks before forwarding",
 			"blocks_removed", removed)
 	}
+}
+
+// containsToolUse reports whether a content list holds a tool_use block.
+func containsToolUse(blocks []any) bool {
+	for _, b := range blocks {
+		block, ok := b.(map[string]any)
+		if ok && block["type"] == "tool_use" {
+			return true
+		}
+	}
+	return false
 }
 
 // isSignedThinkingBlock reports whether a content block is a thinking block
