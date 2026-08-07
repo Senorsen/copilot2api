@@ -33,22 +33,27 @@ func invalidThinkingSignature(body []byte) bool {
 	return strings.Contains(lower, "signature") && strings.Contains(lower, "thinking")
 }
 
-// signaturePathPattern captures the message index named in errors such as
-// "messages.1.content.37: Invalid `signature` in `thinking` block".
-var signaturePathPattern = regexp.MustCompile(`messages\.(\d+)\.`)
+// signaturePathPattern captures the message and content-block indices named
+// in errors such as "messages.1.content.37: Invalid `signature` in `thinking`
+// block".
+var signaturePathPattern = regexp.MustCompile(`messages\.(\d+)\.content\.(\d+)`)
 
-// offendingMessageIndex returns the message index named in the upstream error,
-// or -1 when the error does not identify one.
-func offendingMessageIndex(body []byte) int {
+// offendingLocation returns the message and content-block indices named in the
+// upstream error. Either value is -1 when the error does not identify it.
+func offendingLocation(body []byte) (msgIdx, blockIdx int) {
 	m := signaturePathPattern.FindStringSubmatch(upstreamErrorMessage(body))
 	if m == nil {
-		return -1
+		return -1, -1
 	}
-	idx, err := strconv.Atoi(m[1])
+	msgIdx, err := strconv.Atoi(m[1])
 	if err != nil {
-		return -1
+		return -1, -1
 	}
-	return idx
+	blockIdx, err = strconv.Atoi(m[2])
+	if err != nil {
+		return msgIdx, -1
+	}
+	return msgIdx, blockIdx
 }
 
 // upstreamErrorMessage pulls error.message out of an Anthropic error body.
@@ -64,19 +69,27 @@ func upstreamErrorMessage(body []byte) string {
 	return parsed.Error.Message
 }
 
-// stripThinkingSignatures removes the signature field from thinking blocks in
-// a native /v1/messages request body, returning the rewritten body and how
-// many signatures were dropped.
+// stripThinkingSignatures removes thinking blocks whose signature upstream
+// cannot verify, returning the rewritten body and how many blocks were
+// dropped.
 //
-// When msgIndex is >= 0 only that message is repaired, which is what the
-// upstream error identifies. Anthropic reports just the first offending block,
-// so a caller that still gets rejected can widen the scope by passing -1 to
-// clear every message.
+// The whole block is removed rather than just its signature field: signature
+// is required on a thinking block, so clearing the field alone trades one
+// rejection for another ("thinking.signature: Field required").
+//
+// Blocks in the final assistant message are never touched. With thinking
+// enabled that message must begin with a thinking block, so removing it there
+// swaps the signature error for "Expected `thinking` or `redacted_thinking`".
+// Earlier turns carry no such requirement — upstream ignores their thinking
+// blocks anyway — which is exactly where stale signatures accumulate.
+//
+// msgIdx and blockIdx narrow the repair to the exact block upstream named;
+// either may be -1 to widen the scope to a whole message or the whole request.
 //
 // The body is walked as generic JSON rather than through the typed request
 // structs: this path is a verbatim passthrough, and round-tripping it through
 // our own types would silently drop any field we do not model.
-func stripThinkingSignatures(body []byte, msgIndex int) ([]byte, int) {
+func stripThinkingSignatures(body []byte, msgIdx, blockIdx int) ([]byte, int) {
 	var root map[string]any
 	if err := json.Unmarshal(body, &root); err != nil {
 		return body, 0
@@ -87,9 +100,14 @@ func stripThinkingSignatures(body []byte, msgIndex int) ([]byte, int) {
 		return body, 0
 	}
 
+	lastAssistant := protectedAssistantIndex(messages)
+
 	removed := 0
 	for i, m := range messages {
-		if msgIndex >= 0 && i != msgIndex {
+		if msgIdx >= 0 && i != msgIdx {
+			continue
+		}
+		if i == lastAssistant {
 			continue
 		}
 		msg, ok := m.(map[string]any)
@@ -100,21 +118,31 @@ func stripThinkingSignatures(body []byte, msgIndex int) ([]byte, int) {
 		if !ok {
 			continue
 		}
-		for _, b := range blocks {
+
+		kept := make([]any, 0, len(blocks))
+		for j, b := range blocks {
+			if blockIdx >= 0 && j != blockIdx {
+				kept = append(kept, b)
+				continue
+			}
 			block, ok := b.(map[string]any)
-			if !ok {
-				continue
+			if ok && block["type"] == "thinking" {
+				if _, present := block["signature"]; present {
+					removed++
+					continue
+				}
 			}
-			// redacted_thinking blocks are already opaque and carry no
-			// signature field; only "thinking" needs repairing.
-			if block["type"] != "thinking" {
-				continue
-			}
-			if _, present := block["signature"]; present {
-				delete(block, "signature")
-				removed++
-			}
+			kept = append(kept, b)
 		}
+
+		// An assistant turn stripped down to nothing would be an invalid
+		// message, so leave such a turn alone rather than producing a
+		// differently broken request.
+		if len(kept) == 0 && len(blocks) > 0 {
+			removed = 0
+			break
+		}
+		msg["content"] = kept
 	}
 
 	if removed == 0 {
@@ -128,42 +156,72 @@ func stripThinkingSignatures(body []byte, msgIndex int) ([]byte, int) {
 	return rewritten, removed
 }
 
-// retryWithoutThinkingSignatures returns a repaired body when the upstream
-// error is an invalid thinking signature and at least one signature could be
-// removed. The second result reports whether a retry is worth attempting.
+// protectedAssistantIndex returns the index of a trailing assistant message
+// that must keep its thinking blocks, or -1 when none is protected.
 //
-// Repair is scoped to the message the upstream error names, so signatures on
-// unrelated turns are left intact. Only when the error names no message (or
-// that message turns out to hold no signature) does it fall back to clearing
-// every one, which is still preferable to a conversation that can never
-// recover.
+// With thinking enabled the request's final assistant message has to begin
+// with a thinking block, so stripping one there swaps the signature error for
+// "Expected `thinking` or `redacted_thinking`". The requirement applies only
+// while that message is still the last one in the conversation; once a user
+// turn follows, it is ordinary history whose thinking upstream ignores.
+func protectedAssistantIndex(messages []any) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg, ok := messages[i].(map[string]any)
+		if !ok {
+			return -1
+		}
+		switch msg["role"] {
+		case "assistant":
+			return i
+		case "user":
+			// A user turn closes the previous assistant message, lifting the
+			// leading-thinking-block requirement from it.
+			return -1
+		}
+	}
+	return -1
+}
+
+// retryWithoutThinkingSignatures returns a repaired body when the upstream
+// error is an invalid thinking signature and at least one block could be
+// dropped. The second result reports whether a retry is worth attempting.
+//
+// Repair starts at the exact block the error names and widens only as far as
+// needed, so reasoning context on unrelated turns survives.
+// retryWithoutThinkingSignatures returns a repaired body when the upstream
+// error names a thinking block that can be dropped. The second result reports
+// whether a retry is worth attempting.
+//
+// Only the exact block named in the error is removed. Anthropic identifies it
+// as messages.<n>.content.<m>, so there is no need to guess: broader sweeps
+// would discard reasoning context from turns upstream never objected to.
 func retryWithoutThinkingSignatures(body, errBody []byte, endpoint string) ([]byte, bool) {
 	if !invalidThinkingSignature(errBody) {
 		return nil, false
 	}
 
-	idx := offendingMessageIndex(errBody)
-	repaired, removed := stripThinkingSignatures(body, idx)
-	scope := "message " + strconv.Itoa(idx)
-
-	if removed == 0 && idx >= 0 {
-		// The named message held nothing to strip, so fall back to a full sweep
-		// rather than replaying an identical request.
-		repaired, removed = stripThinkingSignatures(body, -1)
-		scope = "all messages (fallback)"
-	}
-
-	if removed == 0 {
-		slog.Warn("upstream rejected a thinking signature but none were found to strip",
+	msgIdx, blockIdx := offendingLocation(errBody)
+	if msgIdx < 0 || blockIdx < 0 {
+		slog.Warn("upstream rejected a thinking signature without naming a block",
 			"endpoint", endpoint,
 			"upstream_error", upstreamErrorMessage(errBody))
 		return nil, false
 	}
 
-	slog.Warn("stripped invalid thinking signatures and retrying",
+	repaired, removed := stripThinkingSignatures(body, msgIdx, blockIdx)
+	if removed == 0 {
+		slog.Warn("upstream rejected a thinking signature but the named block could not be dropped",
+			"endpoint", endpoint,
+			"message_index", msgIdx,
+			"block_index", blockIdx,
+			"upstream_error", upstreamErrorMessage(errBody))
+		return nil, false
+	}
+
+	slog.Warn("dropped the unverifiable thinking block and retrying",
 		"endpoint", endpoint,
-		"scope", scope,
-		"signatures_removed", removed,
+		"message_index", msgIdx,
+		"block_index", blockIdx,
 		"upstream_error", upstreamErrorMessage(errBody))
 	return repaired, true
 }
