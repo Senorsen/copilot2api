@@ -955,6 +955,7 @@ func normalizeNativeMessagesBody(body []byte, newModel string, replaceModel bool
 
 	delete(obj, "context_management")
 	stripCacheControlScope(obj)
+	stripEmptyThinkingBlocks(obj)
 
 	// Rewrite thinking.type "enabled" -> "adaptive" for Copilot backend compatibility.
 	// Also map budget_tokens to output_config.effort if present.
