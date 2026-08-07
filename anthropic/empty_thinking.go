@@ -5,27 +5,26 @@ import (
 )
 
 // Claude Code replays whole conversations, including thinking blocks from
-// earlier turns. Under high reasoning effort the full reasoning is encrypted
-// into the signature and the plaintext `thinking` field is left empty, so a
-// long session accumulates a run of empty-text blocks that exist only to carry
-// opaque signatures.
+// earlier turns. Those blocks carry a signature that upstream verifies, and
+// once one of them stops verifying the conversation is finished: the client
+// resends the same history every turn, so "Invalid `signature` in `thinking`
+// block" repeats forever.
 //
-// Those are exactly the blocks upstream later rejects with
-// "Invalid `signature` in `thinking` block": in the session captured on
-// 2026-08-07, seven of eight thinking blocks had empty text and all seven
-// shared one encrypted-context id, while the single block with real text was
-// unaffected. Because the client resends the same history every turn, one
-// stale block makes the conversation permanently unusable.
+// The offending block cannot be identified from the error. Upstream reported
+// messages.1.content.30 for a message that held two blocks, so its indices
+// describe its own reconstruction of the history rather than the body we sent.
+// Removing only the blocks with empty reasoning text was not enough either.
+// Every signed thinking block in the history is therefore dropped.
 //
-// Dropping them before the request goes out avoids the rejection entirely,
-// and costs nothing readable: an empty `thinking` carries no reasoning we
-// could pass on, and upstream ignores thinking from previous turns anyway.
+// Nothing readable is lost. Upstream ignores thinking blocks from previous
+// turns and excludes them from context accounting, so they influence the reply
+// only by failing verification.
 //
-// Two blocks are deliberately kept:
-//   - anything in a trailing assistant message, which must still begin with a
-//     thinking block while thinking is enabled
-//   - the sole block of a message, since emptying the content list would make
-//     the message invalid
+// Two cases are deliberately preserved:
+//   - the trailing assistant message, which must still begin with a thinking
+//     block while thinking is enabled
+//   - a message's sole block, since emptying the content list would make the
+//     message invalid
 func stripEmptyThinkingBlocks(obj map[string]any) {
 	messages, ok := obj["messages"].([]any)
 	if !ok {
@@ -50,7 +49,7 @@ func stripEmptyThinkingBlocks(obj map[string]any) {
 
 		kept := make([]any, 0, len(blocks))
 		for _, b := range blocks {
-			if isEmptyThinkingBlock(b) {
+			if isSignedThinkingBlock(b) {
 				removed++
 				continue
 			}
@@ -63,23 +62,24 @@ func stripEmptyThinkingBlocks(obj map[string]any) {
 	}
 
 	if removed > 0 {
-		slog.Debug("dropped empty thinking blocks before forwarding",
+		// Info, not Debug: this is the guard against a class of failure that
+		// previously bricked whole sessions, so it needs to be visible in
+		// production logs without raising the level.
+		slog.Info("dropped historical thinking blocks before forwarding",
 			"blocks_removed", removed)
 	}
 }
 
-// isEmptyThinkingBlock reports whether a content block is a thinking block
-// whose reasoning text is empty, leaving only an opaque signature.
-func isEmptyThinkingBlock(b any) bool {
+// isSignedThinkingBlock reports whether a content block is a thinking block
+// carrying a signature, which is what upstream verifies and can reject.
+//
+// redacted_thinking is a distinct type and is left alone. A thinking block
+// without a signature cannot trigger the rejection, so it is kept as well.
+func isSignedThinkingBlock(b any) bool {
 	block, ok := b.(map[string]any)
 	if !ok || block["type"] != "thinking" {
 		return false
 	}
-	// A block with no signature cannot trigger the rejection this guards
-	// against, so leave it alone.
-	if sig, _ := block["signature"].(string); sig == "" {
-		return false
-	}
-	text, _ := block["thinking"].(string)
-	return text == ""
+	sig, _ := block["signature"].(string)
+	return sig != ""
 }

@@ -58,7 +58,8 @@ func TestDropsSignatureOnlyThinkingFromHistory(t *testing.T) {
 }
 
 func TestKeepsThinkingThatCarriesText(t *testing.T) {
-	// Reasoning we can actually pass on must survive untouched.
+	// Reasoning text does not exempt a block: its signature is verified just the
+	// same, and leaving it behind reproduces the failure this guards against.
 	obj := decode(t, `{
 		"messages": [
 			{"role":"user","content":[{"type":"text","text":"hi"}]},
@@ -72,8 +73,8 @@ func TestKeepsThinkingThatCarriesText(t *testing.T) {
 
 	stripEmptyThinkingBlocks(obj)
 
-	if got := contentTypes(t, obj, 1); len(got) != 2 || got[0] != "thinking" {
-		t.Errorf("content = %v, want the thinking block preserved", got)
+	if got := contentTypes(t, obj, 1); len(got) != 1 || got[0] != "text" {
+		t.Errorf("content = %v, want the signed thinking block dropped", got)
 	}
 }
 
