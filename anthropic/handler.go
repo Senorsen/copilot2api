@@ -168,8 +168,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	modelInfo, capabilityFetchFailed := h.getModelInfo(r.Context(), anthropicReq.Model)
 
-	if modelSupportsEndpoint(modelInfo, "/v1/messages") {
+	forceNativeMessages := shouldForceNativeMessages(anthropicReq.Model)
+	if forceNativeMessages || modelSupportsEndpoint(modelInfo, "/v1/messages") {
 		route = "native"
+		if forceNativeMessages && !modelSupportsEndpoint(modelInfo, "/v1/messages") {
+			slog.Warn("forcing native /messages route despite model capability metadata", "model", anthropicReq.Model)
+		}
 		cacheControlInfo := inspectCacheControl(reqBody)
 		topLevelInfo := inspectTopLevelFields(reqBody)
 		slog.Debug("native /messages passthrough request", "model", anthropicReq.Model, "top_level_keys", topLevelInfo.Keys, "has_context_management", topLevelInfo.HasContextManagement, "cache_control_count", cacheControlInfo.Count, "cache_control_scope_count", cacheControlInfo.ScopeCount, "cache_control_paths", cacheControlInfo.Paths, "cache_control_scope_paths", cacheControlInfo.ScopePaths)
@@ -277,6 +281,8 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 		}
 
 		reader := bufio.NewReaderSize(resp.Body, 32*1024)
+		responseSummary := anthropicResponseSummary{}
+		defer func() { logAnthropicResponseSummary("native", originalModel, responseSummary) }()
 		// Delay sse.BeginSSE until we have inspected the first data line, so we
 		// can set the X-Upstream-Model response header (headers must be written
 		// before the first body byte). The model id leaks in the message_start
@@ -298,7 +304,9 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 					}
 					continue
 				}
-				// Try to extract usage from message_delta / message_stop events
+				// Inspect response shape and extract usage without changing the
+				// native Anthropic stream forwarded to the client.
+				responseSummary.observeNativeStreamLine(line)
 				extractNativeStreamUsage(line, usage)
 				// Rewrite the upstream model id in the message_start event back to
 				// the client-requested model id, and surface the real upstream
@@ -350,8 +358,14 @@ func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Extract usage from non-streaming native response
+	// Extract usage and response shape from the non-streaming native response.
 	extractNativeResponseUsage(respData, usage)
+	responseSummary := anthropicResponseSummary{}
+	var nativeResponse AnthropicMessagesResponse
+	if json.Unmarshal(respData, &nativeResponse) == nil {
+		responseSummary.observeResponse(&nativeResponse)
+	}
+	logAnthropicResponseSummary("native", originalModel, responseSummary)
 
 	// Rewrite the upstream model id back to the client-requested model id and
 	// surface the real upstream model via the X-Upstream-Model header.
@@ -416,6 +430,10 @@ func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Reque
 	usage.NewCache = anthropicResp.Usage.CacheCreationInputTokens
 	usage.Out = anthropicResp.Usage.OutputTokens
 
+	responseSummary := anthropicResponseSummary{}
+	responseSummary.observeResponse(&anthropicResp)
+	logAnthropicResponseSummary("chat_completions", originalModel, responseSummary)
+
 	// Echo the client-requested model id; expose the real upstream model id via header.
 	setUpstreamModelHeader(w, anthropicResp.Model)
 	anthropicResp.Model = originalModel
@@ -440,6 +458,7 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 	defer resp.Body.Close()
 
 	state := NewStreamState()
+	responseSummary := anthropicResponseSummary{}
 
 	finished := h.streamSSE(w, resp.Body, func(event *upstreamSSEEvent) ([]AnthropicStreamEvent, bool, error) {
 		var chunk OpenAIChatCompletionChunk
@@ -452,6 +471,7 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 		if err != nil {
 			return nil, false, err
 		}
+		responseSummary.observeEvents(events)
 
 		// Echo the client-requested model id in the message_start event.
 		overrideStreamEventModel(events, originalModel)
@@ -472,6 +492,7 @@ func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request,
 		return events, state.Finished, nil
 	})
 
+	logAnthropicResponseSummary("chat_completions", originalModel, responseSummary)
 	if !finished {
 		slog.Warn("chat completions stream ended without finish event")
 	}
@@ -527,6 +548,10 @@ func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Req
 	usage.NewCache = anthropicResp.Usage.CacheCreationInputTokens
 	usage.Out = anthropicResp.Usage.OutputTokens
 
+	responseSummary := anthropicResponseSummary{}
+	responseSummary.observeResponse(&anthropicResp)
+	logAnthropicResponseSummary("responses", originalModel, responseSummary)
+
 	// Echo the client-requested model id; expose the real upstream model id via header.
 	setUpstreamModelHeader(w, anthropicResp.Model)
 	anthropicResp.Model = originalModel
@@ -551,6 +576,7 @@ func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Reques
 	defer resp.Body.Close()
 
 	state := NewResponsesStreamState()
+	responseSummary := anthropicResponseSummary{}
 
 	finished := h.streamSSE(w, resp.Body, func(event *upstreamSSEEvent) ([]AnthropicStreamEvent, bool, error) {
 		var streamEvent ResponseStreamEvent
@@ -577,6 +603,7 @@ func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Reques
 		}
 
 		events := TranslateResponsesStreamEvent(streamEvent, state)
+		responseSummary.observeEvents(events)
 
 		// Echo the client-requested model id in the message_start event.
 		overrideStreamEventModel(events, originalModel)
@@ -586,6 +613,7 @@ func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Reques
 		return events, state.MessageCompleted, nil
 	})
 
+	logAnthropicResponseSummary("responses", originalModel, responseSummary)
 	if finished {
 		slog.Debug("responses stream completed")
 	} else {
