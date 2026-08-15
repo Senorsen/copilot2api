@@ -114,11 +114,12 @@ The `/gw/api/...` routes act as a **load-balancing gateway** — they automatica
 
 **Features:**
 
-- **Random account selection** across all registered accounts.
-- **IP affinity**: Within a 5-minute window, the same `(client IP, model)` pair preferentially reuses the same account.
-  - *Anthropic*: Affinity only applies when both the incoming request and the stored session carry `cache_control`.
+- **Model-aware account selection**: Before random selection, the gateway checks each account's cached `/models` list and only chooses among accounts that currently advertise the requested model.
+- **Random account selection** across the resulting model-compatible pool.
+- **IP affinity**: Within a 1-hour window, the same `(client IP, model)` pair preferentially reuses the same compatible account.
+  - *Anthropic*: Affinity only applies when the incoming request carries `cache_control`.
   - *OpenAI*: Affinity always applies.
-- **Auto-retry**: On failure, the gateway automatically switches to a different account.
+- **Reactive model fallback**: If an account still returns `400 The requested model is not supported.` (for example because its cached availability changed), the gateway invalidates that account's model cache and retries another compatible account. Streaming success responses remain streamed rather than buffered.
 - **`GW_EXCLUDE` environment variable**: Comma-separated list of `account_id` values to exclude from gateway routing (e.g. `GW_EXCLUDE=uuid1,uuid2`).
 
 **Authentication:** Same as the Data Plane — use `API_TOKEN` via `Authorization: Bearer` or `x-api-key`.

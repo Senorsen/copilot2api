@@ -5,14 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"math/rand"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/internal/reqctx"
@@ -36,6 +34,9 @@ type Handler struct {
 
 	mu       sync.RWMutex
 	affinity map[string]*affinityEntry // key: ip + "|" + model
+
+	modelsMu      sync.RWMutex
+	accountModels map[string]*accountModelsEntry
 }
 
 // NewHandler creates a new gateway handler.
@@ -50,11 +51,12 @@ func NewHandler(am *auth.AccountManager, transport *http.Transport, mc *models.C
 		}
 	}
 	h := &Handler{
-		am:        am,
-		transport: transport,
-		mc:        mc,
-		exclude:   exclude,
-		affinity:  make(map[string]*affinityEntry),
+		am:            am,
+		transport:     transport,
+		mc:            mc,
+		exclude:       exclude,
+		affinity:      make(map[string]*affinityEntry),
+		accountModels: make(map[string]*accountModelsEntry),
 	}
 	go h.cleanupLoop()
 	return h
@@ -106,93 +108,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine account via affinity or random
-	affinityHit := false
-	var chosenAccountID string
-
-	affinityKey := clientIP + "|" + model
-	if model != "" {
-		h.mu.RLock()
-		entry, exists := h.affinity[affinityKey]
-		h.mu.RUnlock()
-
-		if exists && time.Now().Before(entry.ExpiresAt) {
-			isAnthropic := strings.Contains(remainder, "/v1/messages")
-			if isAnthropic {
-				// Only use affinity if current request has cache_control
-				if hasCache {
-					if h.inPool(entry.AccountID, pool) {
-						chosenAccountID = entry.AccountID
-						affinityHit = true
-					}
-				}
-			} else {
-				// OpenAI: always use affinity
-				if h.inPool(entry.AccountID, pool) {
-					chosenAccountID = entry.AccountID
-					affinityHit = true
-				}
-			}
+	filteredPool, knownUnsupported := h.filterPoolForModel(r.Context(), pool, model)
+	if len(filteredPool) == 0 {
+		if knownUnsupported {
+			proxy.WriteOpenAIError(w, http.StatusBadRequest, proxy.OpenAIErrorTypeInvalidRequest, "The requested model is not supported by any available account.")
+		} else {
+			proxy.WriteOpenAIError(w, http.StatusServiceUnavailable, proxy.OpenAIErrorTypeServerError, "no accounts available")
 		}
+		return
 	}
 
-	if chosenAccountID == "" {
-		chosenAccountID = pool[rand.Intn(len(pool))]
-	}
-
-	// Try to get client and validate token before dispatching
-	client, ok := h.am.GetClient(chosenAccountID)
-	if !ok || !h.canGetToken(client) {
-		// Retry with another account
-		retryID := h.pickOther(pool, chosenAccountID)
-		if retryID != "" {
-			chosenAccountID = retryID
-			affinityHit = false
-			client, ok = h.am.GetClient(chosenAccountID)
-		}
-		if !ok {
-			proxy.WriteOpenAIError(w, http.StatusBadGateway, proxy.OpenAIErrorTypeServerError, "no available account")
-			return
-		}
-	}
-
-	tp := auth.NewAccountTokenProvider(client)
-	tp.AccountID = chosenAccountID
-
-	// Update affinity record
-	if model != "" {
-		isAnthropic := strings.Contains(remainder, "/v1/messages")
-		if !isAnthropic || hasCache {
-			// For Anthropic: only update affinity when request has cache_control,
-			// so non-cache requests don't overwrite existing cache affinity records.
-			// For OpenAI: always update affinity.
-			h.mu.Lock()
-			h.affinity[affinityKey] = &affinityEntry{
-				AccountID: chosenAccountID,
-				ExpiresAt: time.Now().Add(1 * time.Hour),
-			}
-			h.mu.Unlock()
-		}
-	}
-
-	// Inject affinity info into request context for downstream handlers to log.
-	ctx := reqctx.WithAffinity(r.Context(), chosenAccountID, affinityHit, hasCache)
-	r = r.WithContext(ctx)
-
-	// Restore body and rewrite path
-	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-	r.URL.Path = remainder
-
-	switch {
-	case remainder == "/v1/messages" || strings.HasPrefix(remainder, "/v1/messages"):
-		handler := anthropic.NewHandler(tp, h.transport, h.mc)
-		handler.StatsRecorder = h.Recorder
-		handler.ServeHTTP(w, r)
-	default:
-		handler := proxy.NewHandler(tp, h.transport, h.mc, nil)
-		handler.StatsRecorder = h.Recorder
-		handler.ServeHTTP(w, r)
-	}
+	h.serveWithAccountFallback(w, r, remainder, bodyBytes, model, hasCache, clientIP, filteredPool)
 }
 
 func (h *Handler) canGetToken(client *auth.Client) bool {
@@ -220,19 +146,6 @@ func (h *Handler) inPool(id string, pool []string) bool {
 		}
 	}
 	return false
-}
-
-func (h *Handler) pickOther(pool []string, exclude string) string {
-	var others []string
-	for _, p := range pool {
-		if p != exclude {
-			others = append(others, p)
-		}
-	}
-	if len(others) == 0 {
-		return ""
-	}
-	return others[rand.Intn(len(others))]
 }
 
 func extractModelAndCache(body []byte, remainder string) (model string, hasCache bool) {
