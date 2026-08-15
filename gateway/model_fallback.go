@@ -19,7 +19,7 @@ import (
 	"github.com/whtsky/copilot2api/proxy"
 )
 
-const accountModelsTTL = 5 * time.Minute
+const accountModelsTTL = 24 * time.Hour
 
 type accountModelsEntry struct {
 	models    map[string]struct{}
@@ -203,8 +203,15 @@ func (h *Handler) serveWithAccountFallback(
 		}
 		if isRequestedModelUnsupported(attemptWriter.statusCode(), attemptWriter.body.Bytes()) {
 			h.invalidateAccountModels(accountID)
+			refreshedSupport, refreshErr := h.accountHasModel(r.Context(), accountID, model)
 			lastUnsupported = attemptWriter
-			slog.Warn("gateway account rejected requested model; trying another account", "account_id", accountID, "model", model)
+			slog.Warn(
+				"gateway account rejected requested model; refreshed account models and trying another account",
+				"account_id", accountID,
+				"model", model,
+				"refreshed_support", refreshedSupport,
+				"refresh_error", refreshErr,
+			)
 			continue
 		}
 

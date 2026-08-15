@@ -122,9 +122,11 @@ func TestGatewayFiltersPoolByAccountModelAvailability(t *testing.T) {
 func TestGatewayRetriesModelUnsupportedOnAnotherAvailableAccount(t *testing.T) {
 	const requestedModel = "gpt-transient-availability"
 	var rejectedCalls atomic.Int32
+	var rejectedModelsCalls atomic.Int32
 	rejected := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/models":
+			rejectedModelsCalls.Add(1)
 			writeModels(w, requestedModel)
 		case "/chat/completions":
 			rejectedCalls.Add(1)
@@ -167,6 +169,9 @@ func TestGatewayRetriesModelUnsupportedOnAnotherAvailableAccount(t *testing.T) {
 	}
 	if got := rejectedCalls.Load(); got != 1 {
 		t.Fatalf("rejected account calls = %d, want 1", got)
+	}
+	if got := rejectedModelsCalls.Load(); got != 2 {
+		t.Fatalf("rejected account model-list calls = %d, want 2 (initial + refresh after rejection)", got)
 	}
 	if got := successfulCalls.Load(); got != 1 {
 		t.Fatalf("successful account calls = %d, want 1", got)
