@@ -13,6 +13,7 @@ import (
 // AggregatedEntry is a daily summary returned by the query API.
 type AggregatedEntry struct {
 	Date            string `json:"date"`
+	ClientID        string `json:"client_id"`
 	AccountID       string `json:"account_id"`
 	Username        string `json:"username"`
 	Model           string `json:"model"`
@@ -31,21 +32,37 @@ type AccountSummary struct {
 	Username  string `json:"username"`
 }
 
-// aggKey is the map key for aggregating stats by date/account/model/effort.
+// QueryFilters controls which usage entries are returned.
+type QueryFilters struct {
+	AccountID       string
+	Model           string
+	ReasoningEffort string
+	ClientID        string
+}
+
+// aggKey is the map key for aggregating stats by date/client/account/model/effort.
 type aggKey struct {
-	date, accountID, model, reasoningEffort string
+	date, clientID, accountID, model, reasoningEffort string
 }
 
 // Query reads JSONL files and returns aggregated daily stats.
 func Query(baseDir, accountID, model string, start, end time.Time) ([]AggregatedEntry, error) {
-	return QueryWithReasoningEffort(baseDir, accountID, model, "", start, end)
+	return QueryWithFilters(baseDir, QueryFilters{AccountID: accountID, Model: model}, start, end)
 }
 
 // QueryWithReasoningEffort reads JSONL files and optionally filters by effort.
 func QueryWithReasoningEffort(baseDir, accountID, model, reasoningEffort string, start, end time.Time) ([]AggregatedEntry, error) {
+	return QueryWithFilters(baseDir, QueryFilters{AccountID: accountID, Model: model, ReasoningEffort: reasoningEffort}, start, end)
+}
+
+// QueryWithFilters reads JSONL files and applies all supported filters.
+func QueryWithFilters(baseDir string, filters QueryFilters, start, end time.Time) ([]AggregatedEntry, error) {
 	agg := make(map[aggKey]*AggregatedEntry)
 	lastUsername := make(map[string]string)
-	reasoningEffort = strings.ToLower(strings.TrimSpace(reasoningEffort))
+	accountID := filters.AccountID
+	model := filters.Model
+	reasoningEffort := strings.ToLower(strings.TrimSpace(filters.ReasoningEffort))
+	clientID := strings.TrimSpace(filters.ClientID)
 
 	// Determine which account dirs to scan
 	var accountDirs []string
@@ -99,7 +116,7 @@ func QueryWithReasoningEffort(baseDir, accountID, model, reasoningEffort string,
 					}
 				}
 
-				readJSONLFile(filepath.Join(yearDir, f.Name()), start, end, model, reasoningEffort, agg, lastUsername)
+				readJSONLFile(filepath.Join(yearDir, f.Name()), start, end, model, reasoningEffort, clientID, agg, lastUsername)
 			}
 		}
 	}
@@ -121,12 +138,15 @@ func QueryWithReasoningEffort(baseDir, accountID, model, reasoningEffort string,
 		if result[i].Model != result[j].Model {
 			return result[i].Model < result[j].Model
 		}
-		return result[i].ReasoningEffort < result[j].ReasoningEffort
+		if result[i].ReasoningEffort != result[j].ReasoningEffort {
+			return result[i].ReasoningEffort < result[j].ReasoningEffort
+		}
+		return result[i].ClientID < result[j].ClientID
 	})
 	return result, nil
 }
 
-func readJSONLFile(path string, start, end time.Time, modelFilter, reasoningEffortFilter string, agg map[aggKey]*AggregatedEntry, usernames map[string]string) {
+func readJSONLFile(path string, start, end time.Time, modelFilter, reasoningEffortFilter, clientIDFilter string, agg map[aggKey]*AggregatedEntry, usernames map[string]string) {
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -152,12 +172,17 @@ func readJSONLFile(path string, start, end time.Time, modelFilter, reasoningEffo
 		if reasoningEffortFilter != "" && e.ReasoningEffort != reasoningEffortFilter {
 			continue
 		}
+		e.ClientID = normalizeClientID(e.ClientID)
+		if clientIDFilter != "" && e.ClientID != clientIDFilter {
+			continue
+		}
 
-		k := aggKey{day, e.AccountID, e.Model, e.ReasoningEffort}
+		k := aggKey{day, e.ClientID, e.AccountID, e.Model, e.ReasoningEffort}
 		entry, ok := agg[k]
 		if !ok {
 			entry = &AggregatedEntry{
 				Date:            day,
+				ClientID:        e.ClientID,
 				AccountID:       e.AccountID,
 				Username:        e.Username,
 				Model:           e.Model,

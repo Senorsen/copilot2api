@@ -14,6 +14,7 @@ A lightweight Go proxy that exposes GitHub Copilot as OpenAI-compatible, Anthrop
 - **1M Context**: `anthropic-beta: context-1m-*` header auto-appends `-1m` to model ID
 - **Thinking Mode**: `thinking.type: "enabled"` is rewritten to `"adaptive"` for Claude Code compatibility
 - **Usage Monitoring**: Built-in `/usage` endpoint (Control Plane) for quota tracking
+- **Multi-Client Authentication**: Multiple data-plane API keys with per-client usage tracking
 - **Multi-Account** *(fork feature)*: One process manages multiple Copilot accounts with a Control Plane API
 
 ---
@@ -122,18 +123,26 @@ The `/gw/api/...` routes act as a **load-balancing gateway** — they automatica
 - **Reactive model fallback**: If an account still returns `400 The requested model is not supported.` (for example because its cached availability changed), the gateway invalidates that account's model cache and retries another compatible account. Streaming success responses remain streamed rather than buffered.
 - **`GW_EXCLUDE` environment variable**: Comma-separated list of `account_id` values to exclude from gateway routing (e.g. `GW_EXCLUDE=uuid1,uuid2`).
 
-**Authentication:** Same as the Data Plane — use `API_TOKEN` via `Authorization: Bearer` or `x-api-key`.
+**Authentication:** Same as the Data Plane — use a configured API token via `Authorization: Bearer` or `x-api-key`.
 
 ### Authentication
 
-Set `API_TOKEN` environment variable. Requests must include one of:
+Configure exactly one of `API_TOKEN` (single client token) or `API_TOKENS` (multiple client tokens). `API_TOKENS` uses whitespace-separated `id:token` entries:
+
+```bash
+API_TOKENS='alice:alice-secret bob:bob-secret'
+```
+
+The first colon separates the client ID, so a token may contain additional colons or commas, but not whitespace. Client IDs and tokens must both be unique. Setting both variables makes startup fail.
+
+Requests must include one of:
 
 ```
 Authorization: Bearer your-api-token-here
 x-api-key: your-api-token-here
 ```
 
-If `API_TOKEN` is empty, authentication is skipped (dev mode).
+If neither `API_TOKEN` nor `API_TOKENS` is configured, authentication is skipped (dev mode). Requests authenticated with `API_TOKEN` are attributed to client ID `default`.
 
 ### Example
 
@@ -261,13 +270,13 @@ Enable with `COPILOT2API_STATS_ENABLED=true`. Records per-request token usage to
 GET /dashboard
 ```
 
-Interactive HTML dashboard with stacked bar charts, estimated costs (via LiteLLM pricing data), time range selectors, combinable model/account/reasoning-effort dimensions and filters, and auto-refresh. Requires `ADMIN_TOKEN` entered in the UI (stored in localStorage).
+Interactive HTML dashboard with stacked bar charts, estimated costs (via LiteLLM pricing data), time range selectors, combinable client/model/account/reasoning-effort dimensions and filters, and auto-refresh. Requires `ADMIN_TOKEN` entered in the UI (stored in localStorage).
 
 ```
-GET /usage?start=YYYY-MM-DD&end=YYYY-MM-DD[&account_id=...][&model=...][&reasoning_effort=...]
+GET /usage?start=YYYY-MM-DD&end=YYYY-MM-DD[&client_id=...][&account_id=...][&model=...][&reasoning_effort=...]
 ```
 
-Returns aggregated daily token stats (input, output, cached) per model/account/reasoning effort. Reasoning effort is the client-requested value when provided explicitly, or a classification derived from a supplied thinking budget; requests without either are reported as `unspecified`. Usage stats cover recorded OpenAI-compatible and Anthropic traffic; native Gemini traffic is not currently recorded. Requires `ADMIN_TOKEN` via `Authorization: Bearer` header.
+Returns aggregated daily token stats (input, output, cached) per client/model/account/reasoning effort. Historical records, unauthenticated requests, and requests authenticated with `API_TOKEN` are attributed to `default`. Reasoning effort is the client-requested value when provided explicitly, or a classification derived from a supplied thinking budget; requests without either are reported as `unspecified`. Usage stats cover recorded OpenAI-compatible and Anthropic traffic; native Gemini traffic is not currently recorded. Requires `ADMIN_TOKEN` via `Authorization: Bearer` header.
 
 ```
 GET /usage/accounts
@@ -287,13 +296,14 @@ Returns cached LiteLLM model pricing JSON. Automatically fetched on startup and 
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `API_TOKEN` | Data plane auth token (optional) | — |
+| `API_TOKEN` | Single data-plane auth token; mutually exclusive with `API_TOKENS` | — |
+| `API_TOKENS` | Whitespace-separated data-plane `id:token` entries; mutually exclusive with `API_TOKEN` | — |
 | `ADMIN_TOKEN` | Control plane auth token (optional) | — |
 | `GW_EXCLUDE` | Comma-separated `account_id` list to exclude from gateway routing | — |
 | `COPILOT2API_TOKEN_DIR` | Credentials storage directory | `~/.config/copilot2api` |
 | `COPILOT2API_HOST` | Server host | `127.0.0.1` |
 | `COPILOT2API_PORT` | Data plane port | `7777` |
-| `COPILOT2API_ADMIN_PORT` | Control plane port | `7778` |
+| `COPILOT2API_CONTROL_PORT` | Control plane port | `7778` |
 | `COPILOT2API_DEBUG` | Enable debug logging | `false` |
 | `COPILOT2API_STATS_ENABLED` | Enable usage stats recording, dashboard, and pricing | `false` |
 | `COPILOT2API_STATS_DIR` | Stats data directory | `~/.config/copilot2api/stats` |

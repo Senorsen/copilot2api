@@ -69,6 +69,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var usage proxyTokenUsage
 	var requestModel string
 	accountID, username := h.accountInfo()
+	clientID := reqctx.GetClientID(r.Context())
 	clientIP := reqctx.GetClientIP(r)
 	affinityAccount, affinityHit, _, isGateway := reqctx.GetAffinity(r.Context())
 	defer func() {
@@ -79,6 +80,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"endpoint", endpoint,
 			"client_ip", clientIP,
 			"duration_ms", time.Since(start).Milliseconds(),
+			"client_id", clientID,
 			"account_id", accountID,
 			"username", username,
 			"tokens_in_all", usage.In,
@@ -97,6 +99,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.StatsRecorder != nil && usage.Total > 0 {
 			h.StatsRecorder.Record(stats.Entry{
 				Timestamp:       time.Now(),
+				ClientID:        clientID,
 				AccountID:       accountID,
 				Username:        username,
 				Model:           requestModel,

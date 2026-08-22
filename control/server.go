@@ -352,11 +352,14 @@ func (s *Server) handleUsageQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountID := r.URL.Query().Get("account_id")
-	model := r.URL.Query().Get("model")
-	reasoningEffort := r.URL.Query().Get("reasoning_effort")
+	filters := stats.QueryFilters{
+		AccountID:       r.URL.Query().Get("account_id"),
+		Model:           r.URL.Query().Get("model"),
+		ReasoningEffort: r.URL.Query().Get("reasoning_effort"),
+		ClientID:        r.URL.Query().Get("client_id"),
+	}
 
-	results, err := stats.QueryWithReasoningEffort(s.statsDir, accountID, model, reasoningEffort, start, end)
+	results, err := stats.QueryWithFilters(s.statsDir, filters, start, end)
 	if err != nil {
 		slog.Error("failed to query stats", "error", err)
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to query stats"})

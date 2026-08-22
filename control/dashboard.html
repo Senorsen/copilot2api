@@ -45,11 +45,11 @@ canvas { width: 100% !important; }
 <script>
 const app = document.getElementById('app');
 let chart = null;
-const defaultDims = { model: false, account: false, reasoningEffort: false };
+const defaultDims = { client: false, model: false, account: false, reasoningEffort: false };
 let savedDims = {};
 try { savedDims = JSON.parse(localStorage.getItem('c2a_dims') || '{}') || {}; } catch (_) {}
 let currentRange = localStorage.getItem('c2a_range') || 30, currentAggr = localStorage.getItem('c2a_aggr') || 'day', currentDims = { ...defaultDims, ...savedDims }, currentTokenView = 'all';
-let filterModel = localStorage.getItem('c2a_filterModel') || '', filterAccount = localStorage.getItem('c2a_filterAccount') || '', filterReasoningEffort = localStorage.getItem('c2a_filterReasoningEffort') || '';
+let filterClient = localStorage.getItem('c2a_filterClient') || '', filterModel = localStorage.getItem('c2a_filterModel') || '', filterAccount = localStorage.getItem('c2a_filterAccount') || '', filterReasoningEffort = localStorage.getItem('c2a_filterReasoningEffort') || '';
 let rawData = [];
 
 async function showDashboard() {
@@ -80,9 +80,10 @@ async function showDashboard() {
 </div>
 <div class="controls">
   <span class="lbl">Dimension:</span>
-  <button class="btn dim" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim" data-dim="reasoningEffort">By Reasoning Effort</button><button class="btn dim active" data-dim="aggr">Aggregated</button>
+  <button class="btn dim" data-dim="client">By Client</button><button class="btn dim" data-dim="model">By Model</button><button class="btn dim" data-dim="account">By Account</button><button class="btn dim" data-dim="reasoningEffort">By Reasoning Effort</button><button class="btn dim active" data-dim="aggr">Aggregated</button>
   <div class="sep"></div>
   <span class="lbl">Filter:</span>
+  <select id="fClient"><option value="">All Clients</option></select>
   <select id="fModel"><option value="">All Models</option></select>
   <select id="fAccount"><option value="">All Accounts</option></select>
   <select id="fReasoningEffort"><option value="">All Efforts</option></select>
@@ -129,7 +130,7 @@ async function showDashboard() {
       document.querySelector('.dim[data-dim="aggr"]').classList.remove('active');
       currentDims[dim] = !currentDims[dim];
       b.classList.toggle('active');
-      if (!currentDims.model && !currentDims.account && !currentDims.reasoningEffort) {
+      if (!currentDims.client && !currentDims.model && !currentDims.account && !currentDims.reasoningEffort) {
         currentDims = { ...defaultDims };
         document.querySelector('.dim[data-dim="aggr"]').classList.add('active');
       }
@@ -137,6 +138,7 @@ async function showDashboard() {
     localStorage.setItem('c2a_dims', JSON.stringify(currentDims));
     render();
   });
+  document.getElementById('fClient').onchange = e => { filterClient = e.target.value; localStorage.setItem('c2a_filterClient', filterClient); render(); };
   document.getElementById('fModel').onchange = e => { filterModel = e.target.value; localStorage.setItem('c2a_filterModel', filterModel); render(); };
   document.getElementById('fAccount').onchange = e => { filterAccount = e.target.value; localStorage.setItem('c2a_filterAccount', filterAccount); render(); };
   document.getElementById('fReasoningEffort').onchange = e => { filterReasoningEffort = e.target.value; localStorage.setItem('c2a_filterReasoningEffort', filterReasoningEffort); render(); };
@@ -153,8 +155,9 @@ async function showDashboard() {
   // Restore saved Group button
   document.querySelectorAll('.aggr').forEach(b => { if (b.dataset.a === currentAggr) { b.classList.add('active2'); } else { b.classList.remove('active2'); } });
   // Restore saved Dimension buttons
-  if (currentDims.model || currentDims.account || currentDims.reasoningEffort) {
+  if (currentDims.client || currentDims.model || currentDims.account || currentDims.reasoningEffort) {
     document.querySelector('.dim[data-dim="aggr"]').classList.remove('active');
+    if (currentDims.client) document.querySelector('.dim[data-dim="client"]').classList.add('active');
     if (currentDims.model) document.querySelector('.dim[data-dim="model"]').classList.add('active');
     if (currentDims.account) document.querySelector('.dim[data-dim="account"]').classList.add('active');
     if (currentDims.reasoningEffort) document.querySelector('.dim[data-dim="reasoningEffort"]').classList.add('active');
@@ -297,14 +300,15 @@ async function fetchData() {
 }
 
 function populateFilters() {
-  const models = new Set(), accounts = new Set(), reasoningEfforts = new Set();
-  rawData.forEach(d => { models.add(d.model); accounts.add(d.username || d.account_id); reasoningEfforts.add(reasoningEffortValue(d)); });
-  const fM = document.getElementById('fModel'), fA = document.getElementById('fAccount'), fR = document.getElementById('fReasoningEffort');
-  const prevM = filterModel, prevA = filterAccount, prevR = filterReasoningEffort;
+  const clients = new Set(), models = new Set(), accounts = new Set(), reasoningEfforts = new Set();
+  rawData.forEach(d => { clients.add(clientValue(d)); models.add(d.model); accounts.add(d.username || d.account_id); reasoningEfforts.add(reasoningEffortValue(d)); });
+  const fC = document.getElementById('fClient'), fM = document.getElementById('fModel'), fA = document.getElementById('fAccount'), fR = document.getElementById('fReasoningEffort');
+  const prevC = filterClient, prevM = filterModel, prevA = filterAccount, prevR = filterReasoningEffort;
+  populateFilterOptions(fC, 'All Clients', clients);
   populateFilterOptions(fM, 'All Models', models);
   populateFilterOptions(fA, 'All Accounts', accounts);
   populateFilterOptions(fR, 'All Efforts', reasoningEfforts, reasoningEffortLabel);
-  fM.value = prevM || filterModel; fA.value = prevA || filterAccount; fR.value = prevR || filterReasoningEffort;
+  fC.value = prevC || filterClient; fM.value = prevM || filterModel; fA.value = prevA || filterAccount; fR.value = prevR || filterReasoningEffort;
 }
 
 function populateFilterOptions(select, allLabel, values, label = value => value) {
@@ -312,11 +316,13 @@ function populateFilterOptions(select, allLabel, values, label = value => value)
   [...values].sort().forEach(value => select.add(new Option(label(value), value)));
 }
 
+function clientValue(d) { return d.client_id || 'default'; }
 function reasoningEffortValue(d) { return d.reasoning_effort || 'unspecified'; }
 function reasoningEffortLabel(effort) { return effort === 'unspecified' ? 'Unspecified' : effort; }
 
 function filtered() {
   return rawData.filter(d => {
+    if (filterClient && clientValue(d) !== filterClient) return false;
     if (filterModel && d.model !== filterModel) return false;
     if (filterAccount && (d.username || d.account_id) !== filterAccount) return false;
     if (filterReasoningEffort && reasoningEffortValue(d) !== filterReasoningEffort) return false;
@@ -374,6 +380,7 @@ function renderChart(data) {
     const bucket = aggrKey(d.date);
     let k;
     const parts = [];
+    if (currentDims.client) parts.push(clientValue(d));
     if (currentDims.model) parts.push(d.model);
     if (currentDims.account) parts.push(d.username || d.account_id);
     if (currentDims.reasoningEffort) parts.push(reasoningEffortLabel(reasoningEffortValue(d)));

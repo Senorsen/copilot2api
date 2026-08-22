@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/internal/models"
+	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/internal/upstream"
 	"github.com/whtsky/copilot2api/stats"
 )
@@ -150,6 +151,7 @@ func TestHandlerRecordsReasoningEffort(t *testing.T) {
 		"output_config":{"effort":"max"}
 	}`
 	request := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	request = request.WithContext(reqctx.WithClientID(request.Context(), "client-anthropic"))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	recorder.Close()
@@ -174,6 +176,9 @@ func TestHandlerRecordsReasoningEffort(t *testing.T) {
 	}
 	if entry.ReasoningEffort != "max" {
 		t.Errorf("ReasoningEffort = %q, want max", entry.ReasoningEffort)
+	}
+	if entry.ClientID != "client-anthropic" {
+		t.Errorf("ClientID = %q, want client-anthropic", entry.ClientID)
 	}
 	if entry.AccountID != "acc-anthropic" || entry.Username != "alice" {
 		t.Errorf("account = (%q, %q), want (acc-anthropic, alice)", entry.AccountID, entry.Username)
