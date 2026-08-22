@@ -3,7 +3,6 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"testing"
 
 	"github.com/whtsky/copilot2api/internal/reqctx"
@@ -14,18 +13,18 @@ func TestParseAPITokenConfig(t *testing.T) {
 		name      string
 		apiToken  string
 		apiTokens string
-		want      apiTokenSet
+		want      map[string]string
 		wantErr   bool
 	}{
 		{
 			name:     "single token",
 			apiToken: "single-secret",
-			want:     apiTokenSet{"single-secret": reqctx.DefaultClientID},
+			want:     map[string]string{"single-secret": reqctx.DefaultClientID},
 		},
 		{
 			name:      "multiple tokens with punctuation",
 			apiTokens: "alice:token:with:colons bob:token,with,commas",
-			want: apiTokenSet{
+			want: map[string]string{
 				"token:with:colons": "alice",
 				"token,with,commas": "bob",
 			},
@@ -46,17 +45,32 @@ func TestParseAPITokenConfig(t *testing.T) {
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseAPITokenConfig() error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Fatalf("parseAPITokenConfig() = %#v, want %#v", got, tt.want)
+			if tt.wantErr {
+				if len(got) != 0 {
+					t.Fatalf("parseAPITokenConfig() returned %d partial credentials on error", len(got))
+				}
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("len(parseAPITokenConfig()) = %d, want %d", len(got), len(tt.want))
+			}
+			for token, wantID := range tt.want {
+				gotID, ok := got.match(token)
+				if !ok || gotID != wantID {
+					t.Fatalf("configured token matched (%q, %v), want (%q, true)", gotID, ok, wantID)
+				}
+			}
+			if _, ok := got.match("not-configured"); ok {
+				t.Fatal("unconfigured token matched")
 			}
 		})
 	}
 }
 
 func TestAPITokenAuth(t *testing.T) {
-	tokens := apiTokenSet{
-		"secret:with,commas": "alice",
-		"second-secret":      "bob",
+	tokens, err := parseAPITokenConfig("", "alice:secret:with,commas bob:second-secret")
+	if err != nil {
+		t.Fatal(err)
 	}
 	tests := []struct {
 		name       string
