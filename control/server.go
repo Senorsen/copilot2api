@@ -16,6 +16,7 @@ import (
 
 	"github.com/whtsky/copilot2api/auth"
 	"github.com/whtsky/copilot2api/internal/models"
+	"github.com/whtsky/copilot2api/internal/securetoken"
 	"github.com/whtsky/copilot2api/stats"
 	"github.com/whtsky/copilot2api/storage"
 )
@@ -38,14 +39,15 @@ func generateUUID() string {
 
 // Server is the control plane HTTP server (port 7778).
 type Server struct {
-	am           *auth.AccountManager
-	adminToken   string
-	statsDir     string
-	pricingCache *stats.PricingCache
-	modelsCache  *models.Cache
-	commit       string
-	mu           sync.Mutex
-	flows        map[string]*pendingFlow
+	am               *auth.AccountManager
+	adminTokenDigest securetoken.Digest
+	adminAuthEnabled bool
+	statsDir         string
+	pricingCache     *stats.PricingCache
+	modelsCache      *models.Cache
+	commit           string
+	mu               sync.Mutex
+	flows            map[string]*pendingFlow
 }
 
 type pendingFlow struct {
@@ -69,13 +71,14 @@ func NewServer(am *auth.AccountManager, adminToken string, statsDir string, pric
 	}
 
 	return &Server{
-		am:           am,
-		adminToken:   adminToken,
-		statsDir:     statsDir,
-		pricingCache: pricingCache,
-		modelsCache:  modelsCache,
-		commit:       commit,
-		flows:        make(map[string]*pendingFlow),
+		am:               am,
+		adminTokenDigest: securetoken.Hash(adminToken),
+		adminAuthEnabled: adminToken != "",
+		statsDir:         statsDir,
+		pricingCache:     pricingCache,
+		modelsCache:      modelsCache,
+		commit:           commit,
+		flows:            make(map[string]*pendingFlow),
 	}
 }
 
@@ -100,7 +103,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if s.adminToken == "" {
+		if !s.adminAuthEnabled {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -110,7 +113,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if token != s.adminToken {
+		if !s.adminTokenDigest.Matches(token) {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid token"})
 			return
 		}
