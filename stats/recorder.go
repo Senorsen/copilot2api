@@ -9,11 +9,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/whtsky/copilot2api/internal/reqctx"
 )
 
 // Entry represents a single usage record.
 type Entry struct {
 	Timestamp       time.Time `json:"timestamp"`
+	ClientID        string    `json:"client_id"`
 	AccountID       string    `json:"account_id"`
 	Username        string    `json:"username"`
 	Model           string    `json:"model"`
@@ -26,6 +29,13 @@ type Entry struct {
 	TokensNewCache  int       `json:"tokens_new_cache"`
 	TokensTotal     int       `json:"tokens_total"`
 	DurationMs      int64     `json:"duration_ms"`
+}
+
+func normalizeClientID(clientID string) string {
+	if clientID == "" {
+		return reqctx.DefaultClientID
+	}
+	return clientID
 }
 
 // Recorder appends usage entries to JSONL files on disk.
@@ -105,6 +115,7 @@ func (r *Recorder) Record(entry Entry) {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}
+	entry.ClientID = normalizeClientID(entry.ClientID)
 	entry.ReasoningEffort = ClassifyReasoningEffort(entry.ReasoningEffort, nil)
 	path := r.filePath(entry)
 

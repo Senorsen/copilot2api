@@ -9,10 +9,14 @@ import (
 
 type contextKey int
 
+// DefaultClientID is used when no explicit client ID is available.
+const DefaultClientID = "default"
+
 const (
 	keyAffinity contextKey = iota
 	keyAffinityHit
 	keyHasCache
+	keyClientID
 )
 
 // WithAffinity stores gateway affinity info in the request context.
@@ -33,6 +37,20 @@ func GetAffinity(ctx context.Context) (accountID string, hit bool, hasCache bool
 	h, _ := ctx.Value(keyAffinityHit).(bool)
 	c, _ := ctx.Value(keyHasCache).(bool)
 	return v, h, c, true
+}
+
+// WithClientID stores the authenticated data-plane client ID.
+func WithClientID(ctx context.Context, clientID string) context.Context {
+	return context.WithValue(ctx, keyClientID, clientID)
+}
+
+// GetClientID returns the data-plane client ID, defaulting to DefaultClientID.
+func GetClientID(ctx context.Context) string {
+	clientID, _ := ctx.Value(keyClientID).(string)
+	if clientID == "" {
+		return DefaultClientID
+	}
+	return clientID
 }
 
 // GetClientIP extracts the client IP from the request, checking

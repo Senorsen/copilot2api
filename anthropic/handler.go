@@ -119,6 +119,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var usage tokenUsage
 	reasoningEffort := requestedReasoningEffort(anthropicReq)
 	accountID, username := h.accountInfo()
+	clientID := reqctx.GetClientID(r.Context())
 	clientIP := reqctx.GetClientIP(r)
 	affinityAccount, affinityHit, hasCache, isGateway := reqctx.GetAffinity(r.Context())
 	defer func() {
@@ -132,6 +133,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"reasoning_effort", reasoningEffort,
 			"route", route,
 			"duration_ms", time.Since(start).Milliseconds(),
+			"client_id", clientID,
 			"account_id", accountID,
 			"username", username,
 			"tokens_in_all", usage.In + usage.Cached + usage.NewCache,
@@ -150,6 +152,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.StatsRecorder != nil && (usage.In+usage.Cached+usage.NewCache+usage.Out) > 0 {
 			h.StatsRecorder.Record(stats.Entry{
 				Timestamp:       time.Now(),
+				ClientID:        clientID,
 				AccountID:       accountID,
 				Username:        username,
 				Model:           anthropicReq.Model,

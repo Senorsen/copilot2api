@@ -15,6 +15,7 @@ import (
 
 	"github.com/whtsky/copilot2api/internal/copilot"
 	"github.com/whtsky/copilot2api/internal/models"
+	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/internal/upstream"
 	"github.com/whtsky/copilot2api/stats"
 )
@@ -315,6 +316,7 @@ func TestHandler_RecordsReasoningEffort(t *testing.T) {
 			}
 
 			req := httptest.NewRequest("POST", tt.path, strings.NewReader(tt.body))
+			req = req.WithContext(reqctx.WithClientID(req.Context(), "client-proxy"))
 			req.Header.Set("Content-Type", "application/json")
 			resp := httptest.NewRecorder()
 			handler.ServeHTTP(resp, req)
@@ -340,6 +342,9 @@ func TestHandler_RecordsReasoningEffort(t *testing.T) {
 			}
 			if entry.ReasoningEffort != tt.want {
 				t.Errorf("ReasoningEffort = %q, want %q", entry.ReasoningEffort, tt.want)
+			}
+			if entry.ClientID != "client-proxy" {
+				t.Errorf("ClientID = %q, want client-proxy", entry.ClientID)
 			}
 		})
 	}

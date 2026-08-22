@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/internal/reqctx"
 	"github.com/whtsky/copilot2api/stats"
 	"github.com/whtsky/copilot2api/storage"
 )
@@ -65,6 +66,7 @@ func TestHandlerRecordsReasoningEffort(t *testing.T) {
 		"/gw/api/v1/chat/completions",
 		strings.NewReader(`{"model":"gpt-5","messages":[],"reasoning_effort":"XHIGH","stream":false}`),
 	)
+	request = request.WithContext(reqctx.WithClientID(request.Context(), "client-gateway"))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	recorder.Close()
@@ -89,6 +91,9 @@ func TestHandlerRecordsReasoningEffort(t *testing.T) {
 	}
 	if entry.ReasoningEffort != "xhigh" {
 		t.Errorf("ReasoningEffort = %q, want xhigh", entry.ReasoningEffort)
+	}
+	if entry.ClientID != "client-gateway" {
+		t.Errorf("ClientID = %q, want client-gateway", entry.ClientID)
 	}
 	if entry.AccountID != "acc-gateway" || entry.Username != "bob" {
 		t.Errorf("account = (%q, %q), want (acc-gateway, bob)", entry.AccountID, entry.Username)

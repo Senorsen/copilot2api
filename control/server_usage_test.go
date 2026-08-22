@@ -10,16 +10,17 @@ import (
 	"github.com/whtsky/copilot2api/stats"
 )
 
-func TestHandleUsageQueryFiltersReasoningEffort(t *testing.T) {
+func TestHandleUsageQueryCombinesClientAndReasoningFilters(t *testing.T) {
 	baseDir := t.TempDir()
 	recorder := stats.NewRecorder(baseDir)
 	timestamp := time.Date(2026, time.February, 1, 12, 0, 0, 0, time.UTC)
-	recorder.Record(stats.Entry{Timestamp: timestamp, AccountID: "acc", Model: "model", ReasoningEffort: "low", TokensTotal: 1})
-	recorder.Record(stats.Entry{Timestamp: timestamp, AccountID: "acc", Model: "model", ReasoningEffort: "high", TokensTotal: 2})
+	recorder.Record(stats.Entry{Timestamp: timestamp, ClientID: "client-a", AccountID: "acc", Model: "model", ReasoningEffort: "high", TokensTotal: 1})
+	recorder.Record(stats.Entry{Timestamp: timestamp, ClientID: "client-b", AccountID: "acc", Model: "model", ReasoningEffort: "high", TokensTotal: 2})
+	recorder.Record(stats.Entry{Timestamp: timestamp, ClientID: "client-b", AccountID: "acc", Model: "model", ReasoningEffort: "low", TokensTotal: 4})
 	recorder.Close()
 
 	server := &Server{statsDir: baseDir}
-	request := httptest.NewRequest(http.MethodGet, "/usage?start=2026-02-01&end=2026-02-01&reasoning_effort=HIGH", nil)
+	request := httptest.NewRequest(http.MethodGet, "/usage?start=2026-02-01&end=2026-02-01&reasoning_effort=HIGH&client_id=client-b", nil)
 	response := httptest.NewRecorder()
 	server.handleUsageQuery(response, request)
 
@@ -33,7 +34,7 @@ func TestHandleUsageQueryFiltersReasoningEffort(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(response) = %d, want 1: %#v", len(got), got)
 	}
-	if got[0].ReasoningEffort != "high" || got[0].TokensTotal != 2 {
-		t.Fatalf("response entry = %#v, want high effort with 2 tokens", got[0])
+	if got[0].ClientID != "client-b" || got[0].ReasoningEffort != "high" || got[0].TokensTotal != 2 {
+		t.Fatalf("response entry = %#v, want client-b high effort with 2 tokens", got[0])
 	}
 }

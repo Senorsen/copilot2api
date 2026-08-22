@@ -118,6 +118,12 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	apiTokens, err := parseAPITokenConfig(os.Getenv("API_TOKEN"), os.Getenv("API_TOKENS"))
+	if err != nil {
+		slog.Error("invalid API token configuration", "error", err)
+		os.Exit(1)
+	}
+
 	// Determine token directory
 	if *tokenDir == "" {
 		if v := os.Getenv("COPILOT2API_TOKEN_DIR"); v != "" {
@@ -270,10 +276,10 @@ func main() {
 		proxyHandler.HandleUsage(w, r)
 	})
 
-	// Create proxy server with optional API_TOKEN auth
+	// Create proxy server with optional API_TOKEN/API_TOKENS auth
 	var proxyHandler http.Handler = logAllRequests(mux)
-	if apiToken := os.Getenv("API_TOKEN"); apiToken != "" {
-		proxyHandler = apiTokenAuth(apiToken, proxyHandler)
+	if len(apiTokens) > 0 {
+		proxyHandler = apiTokenAuth(apiTokens, proxyHandler)
 	}
 	proxyServer := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", *host, *port),
@@ -398,20 +404,6 @@ func (a *aggregateUsageProvider) GetUsageInfo(ctx context.Context) (interface{},
 		return results[0], nil
 	}
 	return results, nil
-}
-
-func apiTokenAuth(token string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		auth := r.Header.Get("Authorization")
-		xApiKey := r.Header.Get("x-api-key")
-		if auth != "Bearer "+token && xApiKey != token {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":{"message":"invalid or missing API_TOKEN","type":"authentication_error","code":"unauthorized"}}`))
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 func logAllRequests(next http.Handler) http.Handler {
