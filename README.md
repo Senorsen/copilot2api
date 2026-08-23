@@ -264,7 +264,7 @@ Returns quota usage across all registered accounts.
 
 #### Usage Statistics (opt-in)
 
-Enable with `COPILOT2API_STATS_ENABLED=true`. Records per-request token usage to JSONL files.
+Enable with `COPILOT2API_STATS_ENABLED=true`. Records per-request token usage to JSONL files. Timestamps and file date partitions are always stored in UTC, independently of the host or container timezone.
 
 ```
 GET /dashboard

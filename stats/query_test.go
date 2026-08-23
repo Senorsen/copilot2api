@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -133,6 +134,23 @@ func TestRecorderWritesUnspecifiedReasoningEffort(t *testing.T) {
 	}
 	if entry.ClientID != "default" {
 		t.Fatalf("ClientID = %q, want default", entry.ClientID)
+	}
+}
+
+func TestRecorderStoresTimestampsAndPartitionsInUTC(t *testing.T) {
+	baseDir := t.TempDir()
+	localTimestamp := time.Date(2026, time.February, 1, 0, 30, 0, 0, time.FixedZone("UTC+8", 8*60*60))
+	recorder := NewRecorder(baseDir)
+	recorder.Record(Entry{Timestamp: localTimestamp, AccountID: "acc", Model: "model"})
+	recorder.Close()
+
+	path := filepath.Join(baseDir, "acc", "2026", "2026-01-31_model.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), `"timestamp":"2026-01-31T16:30:00Z"`) {
+		t.Fatalf("stored record does not contain canonical UTC timestamp: %s", data)
 	}
 }
 

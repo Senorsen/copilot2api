@@ -26,6 +26,7 @@
 
 ### Bug Fixes
 
+- Store usage timestamps and file date partitions canonically in UTC regardless of the host or container timezone.
 - Compare data-plane and control-plane API tokens using fixed-length, constant-time digest checks to reduce timing side channels.
 - Log the decoded dimensions, format, and media type of inline images when upstream rejects a request because of an image, so the offending message can be identified without reproducing the request
 - Preserve OpenAI-style `system` roles found inside Anthropic `messages` when routing to Chat Completions or Responses: retain each message's original position and string/text-block content instead of returning `unsupported message role: system`; native Anthropic passthrough remains standards-compliant and accepts system only via the top-level field
