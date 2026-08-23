@@ -65,3 +65,22 @@ func TestDashboardShowsEscapedCommit(t *testing.T) {
 		t.Fatal("dashboard still contains the build commit placeholder")
 	}
 }
+
+func TestDashboardIncludesBrowserTimezoneQuery(t *testing.T) {
+	server := &Server{commit: "dev"}
+	request := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+	response := httptest.NewRecorder()
+
+	server.handleDashboard(response, request)
+
+	body := response.Body.String()
+	if !strings.Contains(body, "Intl.DateTimeFormat().resolvedOptions().timeZone") {
+		t.Fatal("dashboard does not detect the browser timezone")
+	}
+	if !strings.Contains(body, "timezone: clientTimeZone") {
+		t.Fatal("dashboard does not include the browser timezone in usage queries")
+	}
+	if !strings.Contains(body, "return fmtLocalDate(tmp);") {
+		t.Fatal("dashboard does not keep week grouping in the browser timezone")
+	}
+}

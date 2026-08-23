@@ -45,17 +45,17 @@ type aggKey struct {
 	date, clientID, accountID, model, reasoningEffort string
 }
 
-// Query reads JSONL files and returns aggregated daily stats.
+// Query returns daily stats for [start, end), bucketed in start's location.
 func Query(baseDir, accountID, model string, start, end time.Time) ([]AggregatedEntry, error) {
 	return QueryWithFilters(baseDir, QueryFilters{AccountID: accountID, Model: model}, start, end)
 }
 
-// QueryWithReasoningEffort reads JSONL files and optionally filters by effort.
+// QueryWithReasoningEffort is Query with an optional reasoning-effort filter.
 func QueryWithReasoningEffort(baseDir, accountID, model, reasoningEffort string, start, end time.Time) ([]AggregatedEntry, error) {
 	return QueryWithFilters(baseDir, QueryFilters{AccountID: accountID, Model: model, ReasoningEffort: reasoningEffort}, start, end)
 }
 
-// QueryWithFilters reads JSONL files and applies all supported filters.
+// QueryWithFilters returns filtered daily stats for [start, end), bucketed in start's location.
 func QueryWithFilters(baseDir string, filters QueryFilters, start, end time.Time) ([]AggregatedEntry, error) {
 	agg := make(map[aggKey]*AggregatedEntry)
 	lastUsername := make(map[string]string)
@@ -63,6 +63,9 @@ func QueryWithFilters(baseDir string, filters QueryFilters, start, end time.Time
 	model := filters.Model
 	reasoningEffort := strings.ToLower(strings.TrimSpace(filters.ReasoningEffort))
 	clientID := strings.TrimSpace(filters.ClientID)
+	if !start.Before(end) {
+		return []AggregatedEntry{}, nil
+	}
 
 	// Determine which account dirs to scan
 	var accountDirs []string
@@ -105,7 +108,7 @@ func QueryWithFilters(baseDir string, filters QueryFilters, start, end time.Time
 				if err != nil {
 					continue
 				}
-				if fileDate.Before(start) || fileDate.After(end) {
+				if !utcPartitionOverlaps(fileDate, start, end) {
 					continue
 				}
 				// If model filter set, check filename
@@ -146,7 +149,13 @@ func QueryWithFilters(baseDir string, filters QueryFilters, start, end time.Time
 	return result, nil
 }
 
+func utcPartitionOverlaps(fileDate, start, end time.Time) bool {
+	fileEnd := fileDate.AddDate(0, 0, 1)
+	return fileDate.Before(end) && fileEnd.After(start)
+}
+
 func readJSONLFile(path string, start, end time.Time, modelFilter, reasoningEffortFilter, clientIDFilter string, agg map[aggKey]*AggregatedEntry, usernames map[string]string) {
+	location := start.Location()
 	f, err := os.Open(path)
 	if err != nil {
 		return
@@ -160,11 +169,10 @@ func readJSONLFile(path string, start, end time.Time, modelFilter, reasoningEffo
 		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
 			continue
 		}
-		day := e.Timestamp.Format("2006-01-02")
-		dayTime, _ := time.Parse("2006-01-02", day)
-		if dayTime.Before(start) || dayTime.After(end) {
+		if e.Timestamp.Before(start) || !e.Timestamp.Before(end) {
 			continue
 		}
+		day := e.Timestamp.In(location).Format("2006-01-02")
 		if modelFilter != "" && e.Model != modelFilter {
 			continue
 		}

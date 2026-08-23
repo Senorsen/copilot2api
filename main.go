@@ -14,6 +14,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // Embed IANA zones for client-timezone queries in scratch containers.
 
 	"github.com/whtsky/copilot2api/anthropic"
 	"github.com/whtsky/copilot2api/auth"

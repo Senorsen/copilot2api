@@ -13,7 +13,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 h1 { margin-bottom: 1rem; font-size: 1.5rem; }
 .title-bar { display: flex; align-items: baseline; gap: 0.65rem; margin-bottom: 1rem; }
 .title-bar h1 { margin-bottom: 0; }
-.commit { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; }
+.title-meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; }
 .controls { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-bottom: 0.8rem; align-items: center; }
 .controls .sep { width: 1px; height: 1.5rem; background: var(--border); margin: 0 0.3rem; }
 .controls .lbl { font-size: 0.75rem; color: var(--muted); margin-right: 0.2rem; }
@@ -45,6 +45,9 @@ canvas { width: 100% !important; }
 <script>
 const app = document.getElementById('app');
 let chart = null;
+const clientTimeZone = (() => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch (_) { return 'UTC'; }
+})();
 const defaultDims = { client: false, model: false, account: false, reasoningEffort: false };
 let savedDims = {};
 try { savedDims = JSON.parse(localStorage.getItem('c2a_dims') || '{}') || {}; } catch (_) {}
@@ -53,7 +56,7 @@ let filterClient = localStorage.getItem('c2a_filterClient') || '', filterModel =
 let rawData = [];
 
 async function showDashboard() {
-  app.innerHTML = `<div class="title-bar"><h1>📊 LLM Gateway Usage</h1><span class="commit" id="buildCommit"></span></div>
+  app.innerHTML = `<div class="title-bar"><h1>📊 LLM Gateway Usage</h1><span class="title-meta" id="buildCommit"></span><span class="title-meta" id="clientTimezone"></span></div>
 <div class="token-bar">
   <span class="lbl">API Key:</span>
   <input type="password" id="apiToken" placeholder="Enter control plane admin token" value="${localStorage.getItem('c2a_token') || ''}">
@@ -93,6 +96,7 @@ async function showDashboard() {
 <div class="cards" id="cards"></div>
 <div class="chart-container"><canvas id="chart"></canvas></div>`;
   document.getElementById('buildCommit').textContent = `commit ${app.dataset.commit}`;
+  document.getElementById('clientTimezone').textContent = `timezone ${clientTimeZone}`;
 
   // populate month/quarter pickers FIRST, then attach handlers
   const now = new Date();
@@ -250,8 +254,9 @@ function fmtUSD(n) { if(n>=1) return '$'+n.toLocaleString('en-US',{minimumFracti
 
 function fmtNum(n) { if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return (n/1e6).toFixed(1)+'M'; if(n>=1e3) return (n/1e3).toFixed(1)+'K'; return n.toString(); }
 
+function fmtLocalDate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+
 async function fetchData() {
-  const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   let start, end;
   const now = new Date();
   const cr = String(currentRange);
@@ -288,7 +293,8 @@ async function fetchData() {
   if (!token) { status.className = 'status err'; status.textContent = '⚠ Token required'; return; }
   localStorage.setItem('c2a_token', token);
   try {
-    const r = await fetch(`/usage?start=${fmt(start)}&end=${fmt(end)}`, { headers: { 'Authorization': 'Bearer ' + token } });
+    const params = new URLSearchParams({ start: fmtLocalDate(start), end: fmtLocalDate(end), timezone: clientTimeZone });
+    const r = await fetch(`/usage?${params.toString()}`, { headers: { 'Authorization': 'Bearer ' + token } });
     if (r.status === 401 || r.status === 403) { status.className = 'status err'; status.textContent = '✗ Invalid token'; return; }
     const data = await r.json();
     if (data.error) { status.className = 'status err'; status.textContent = data.error; return; }
@@ -368,7 +374,7 @@ function aggrKey(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
   if (currentAggr === 'week') {
     const tmp = new Date(d); tmp.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    return tmp.toISOString().slice(0,10);
+    return fmtLocalDate(tmp);
   }
   return dateStr.slice(0,7);
 }

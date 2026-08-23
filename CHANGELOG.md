@@ -8,6 +8,7 @@
 - Force 1M context window for capable Claude models (opus/sonnet 4.6+): always inject the `anthropic-beta: context-1m-2025-08-07` header upstream so requests no longer fall back to the 200k hard limit. Replaces the old `-1m` model-suffix swap (those variants no longer exist in Copilot's model list). Applies to native `/v1/messages`, `/chat/completions`, and `/responses` routes; merges with any client-provided beta header.
 - Add debug request capture: set `COPILOT2API_DEBUG_MODELS=gpt-5.4,gpt-5.5` to save request bodies as formatted JSON under `{dataDir}/debug/{model}/`. Captures both OpenAI and Anthropic API requests. One file per request, named `{datetime}-{rand4hex}.json`
 - Add usage statistics system: records token usage per request to JSONL files (`stats/` package)
+- Add timezone-aware usage queries with an optional IANA `timezone` parameter; the dashboard automatically queries and groups data in the browser's timezone
 - Add control plane endpoints: `GET /usage` (query aggregated stats), `GET /usage/accounts` (list accounts with data), `GET /dashboard` (HTML dashboard), `GET /usage/pricing` (LiteLLM pricing data)
 - Add interactive HTML dashboard with Chart.js stacked bar charts, time range selectors, cache hit rate cards, estimated cost, and auto-refresh
 - Stats opt-in via `COPILOT2API_STATS_ENABLED=true` env var (default: disabled). When disabled, stats recording, dashboard, and usage endpoints are inactive
@@ -26,6 +27,7 @@
 
 ### Bug Fixes
 
+- Store usage timestamps and file date partitions canonically in UTC regardless of the host or container timezone.
 - Compare data-plane and control-plane API tokens using fixed-length, constant-time digest checks to reduce timing side channels.
 - Log the decoded dimensions, format, and media type of inline images when upstream rejects a request because of an image, so the offending message can be identified without reproducing the request
 - Preserve OpenAI-style `system` roles found inside Anthropic `messages` when routing to Chat Completions or Responses: retain each message's original position and string/text-block content instead of returning `unsupported message role: system`; native Anthropic passthrough remains standards-compliant and accepts system only via the top-level field

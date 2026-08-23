@@ -115,6 +115,8 @@ func (r *Recorder) Record(entry Entry) {
 	if entry.Timestamp.IsZero() {
 		entry.Timestamp = time.Now()
 	}
+	// Keep timestamps and file partitions independent of the host timezone.
+	entry.Timestamp = entry.Timestamp.UTC()
 	entry.ClientID = normalizeClientID(entry.ClientID)
 	entry.ReasoningEffort = ClassifyReasoningEffort(entry.ReasoningEffort, nil)
 	path := r.filePath(entry)

@@ -264,7 +264,7 @@ Returns quota usage across all registered accounts.
 
 #### Usage Statistics (opt-in)
 
-Enable with `COPILOT2API_STATS_ENABLED=true`. Records per-request token usage to JSONL files.
+Enable with `COPILOT2API_STATS_ENABLED=true`. Records per-request token usage to JSONL files. Timestamps and file date partitions are always stored in UTC, independently of the host or container timezone.
 
 ```
 GET /dashboard
@@ -273,10 +273,12 @@ GET /dashboard
 Interactive HTML dashboard with stacked bar charts, estimated costs (via LiteLLM pricing data), time range selectors, combinable client/model/account/reasoning-effort dimensions and filters, and auto-refresh. Requires `ADMIN_TOKEN` entered in the UI (stored in localStorage).
 
 ```
-GET /usage?start=YYYY-MM-DD&end=YYYY-MM-DD[&client_id=...][&account_id=...][&model=...][&reasoning_effort=...]
+GET /usage?start=YYYY-MM-DD&end=YYYY-MM-DD[&timezone=Asia%2FShanghai][&client_id=...][&account_id=...][&model=...][&reasoning_effort=...]
 ```
 
-Returns aggregated daily token stats (input, output, cached) per client/model/account/reasoning effort. Historical records, unauthenticated requests, and requests authenticated with `API_TOKEN` are attributed to `default`. Reasoning effort is the client-requested value when provided explicitly, or a classification derived from a supplied thinking budget; requests without either are reported as `unspecified`. Usage stats cover recorded OpenAI-compatible and Anthropic traffic; native Gemini traffic is not currently recorded. Requires `ADMIN_TOKEN` via `Authorization: Bearer` header.
+Returns aggregated daily token stats (input, output, cached) per client/model/account/reasoning effort. The optional `timezone` parameter accepts an IANA timezone name. `start` and `end` are interpreted as inclusive calendar dates in that timezone, and response dates are bucketed in the same timezone; it defaults to `UTC` when omitted. The dashboard automatically supplies the browser's timezone.
+
+Historical records, unauthenticated requests, and requests authenticated with `API_TOKEN` are attributed to `default`. Reasoning effort is the client-requested value when provided explicitly, or a classification derived from a supplied thinking budget; requests without either are reported as `unspecified`. Usage stats cover recorded OpenAI-compatible and Anthropic traffic; native Gemini traffic is not currently recorded. Requires `ADMIN_TOKEN` via `Authorization: Bearer` header.
 
 ```
 GET /usage/accounts
