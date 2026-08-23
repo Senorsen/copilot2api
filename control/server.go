@@ -344,16 +344,27 @@ func (s *Server) handleUsageQuery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "start and end query params required (YYYY-MM-DD)"})
 		return
 	}
-	start, err := time.Parse("2006-01-02", startStr)
+	location := time.UTC
+	if timezone := strings.TrimSpace(r.URL.Query().Get("timezone")); timezone != "" {
+		parsedLocation, err := time.LoadLocation(timezone)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid timezone; use an IANA name such as Asia/Shanghai"})
+			return
+		}
+		location = parsedLocation
+	}
+
+	start, err := time.ParseInLocation("2006-01-02", startStr, location)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid start date"})
 		return
 	}
-	end, err := time.Parse("2006-01-02", endStr)
+	end, err := time.ParseInLocation("2006-01-02", endStr, location)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid end date"})
 		return
 	}
+	end = end.AddDate(0, 0, 1)
 
 	filters := stats.QueryFilters{
 		AccountID:       r.URL.Query().Get("account_id"),

@@ -37,7 +37,7 @@ func TestQueryAggregatesAndFiltersReasoningEffort(t *testing.T) {
 	appendStatsJSON(t, baseDir, entries[3], historical)
 
 	start := time.Date(2026, time.February, 1, 0, 0, 0, 0, time.UTC)
-	end := time.Date(2026, time.February, 2, 0, 0, 0, 0, time.UTC)
+	end := time.Date(2026, time.February, 3, 0, 0, 0, 0, time.UTC)
 	got, err := Query(baseDir, "", "", start, end)
 	if err != nil {
 		t.Fatalf("Query() error = %v", err)
@@ -90,7 +90,7 @@ func TestQueryKeepsClientsSeparate(t *testing.T) {
 		appendStatsJSON(t, baseDir, entry, entry)
 	}
 
-	got, err := Query(baseDir, "", "", day, day)
+	got, err := Query(baseDir, "", "", day, day.AddDate(0, 0, 1))
 	if err != nil {
 		t.Fatalf("Query() error = %v", err)
 	}
@@ -110,6 +110,74 @@ func TestQueryKeepsClientsSeparate(t *testing.T) {
 	want := map[string]int{"client-a": 1, "client-b": 2}
 	if !reflect.DeepEqual(totals, want) {
 		t.Fatalf("client totals = %#v, want %#v", totals, want)
+	}
+}
+
+func TestQueryBucketsUTCRecordsByClientCalendarDay(t *testing.T) {
+	tests := []struct {
+		name       string
+		timezone   string
+		date       string
+		timestamps []time.Time
+	}{
+		{
+			name:     "crosses UTC date boundary",
+			timezone: "Asia/Shanghai",
+			date:     "2026-02-01",
+			timestamps: []time.Time{
+				time.Date(2026, time.January, 31, 15, 59, 0, 0, time.UTC),
+				time.Date(2026, time.January, 31, 16, 0, 0, 0, time.UTC),
+				time.Date(2026, time.February, 1, 15, 59, 0, 0, time.UTC),
+				time.Date(2026, time.February, 1, 16, 0, 0, 0, time.UTC),
+			},
+		},
+		{
+			name:     "uses 23-hour DST day",
+			timezone: "America/New_York",
+			date:     "2026-03-08",
+			timestamps: []time.Time{
+				time.Date(2026, time.March, 8, 4, 59, 59, 0, time.UTC),
+				time.Date(2026, time.March, 8, 5, 0, 0, 0, time.UTC),
+				time.Date(2026, time.March, 9, 3, 59, 59, 0, time.UTC),
+				time.Date(2026, time.March, 9, 4, 0, 0, 0, time.UTC),
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			location, err := time.LoadLocation(test.timezone)
+			if err != nil {
+				t.Fatalf("LoadLocation() error = %v", err)
+			}
+			baseDir := t.TempDir()
+			recorder := NewRecorder(baseDir)
+			for i, timestamp := range test.timestamps {
+				recorder.Record(Entry{Timestamp: timestamp, AccountID: "acc", Model: "model", TokensTotal: 1 << i})
+			}
+			recorder.Close()
+
+			start, err := time.ParseInLocation("2006-01-02", test.date, location)
+			if err != nil {
+				t.Fatalf("ParseInLocation() error = %v", err)
+			}
+			got, err := QueryWithFilters(baseDir, QueryFilters{}, start, start.AddDate(0, 0, 1))
+			if err != nil {
+				t.Fatalf("QueryWithFilters() error = %v", err)
+			}
+			want := []AggregatedEntry{{
+				Date:            test.date,
+				ClientID:        "default",
+				AccountID:       "acc",
+				Model:           "model",
+				ReasoningEffort: "unspecified",
+				TokensTotal:     6,
+				RequestCount:    2,
+			}}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("QueryWithFilters() = %#v, want %#v", got, want)
+			}
+		})
 	}
 }
 
