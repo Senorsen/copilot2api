@@ -236,9 +236,13 @@ type OpenAICompletionTokensDetails = types.OpenAICompletionTokensDetails
 type OpenAIChatCompletionChunk = types.OpenAIChatCompletionChunk
 type OpenAIChunkChoice = types.OpenAIChunkChoice
 
-// AnthropicMessageDeltaUsage is usage info in message_delta (only output_tokens)
+// AnthropicMessageDeltaUsage contains cumulative usage in message_delta.
+// Input counts are optional because some upstreams only report them at completion.
+// Pointers distinguish known zero counts from unavailable usage.
 type AnthropicMessageDeltaUsage struct {
-	OutputTokens int `json:"output_tokens"`
+	InputTokens          *int `json:"input_tokens,omitempty"`
+	CacheReadInputTokens *int `json:"cache_read_input_tokens,omitempty"`
+	OutputTokens         int  `json:"output_tokens"`
 }
 
 // AnthropicErrorResponse represents an error response from the Anthropic API

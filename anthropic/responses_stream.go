@@ -244,13 +244,20 @@ func respHandleCompleted(event ResponseStreamEvent, state *ResponsesStreamState)
 
 	if event.Response != nil {
 		anthropicResp := ConvertResponsesToAnthropic(*event.Response)
+		usage := &AnthropicMessageDeltaUsage{OutputTokens: anthropicResp.Usage.OutputTokens}
+		if event.Response.Usage != nil {
+			// response.created often has no usage. Send the final input/cache
+			// totals here so clients can reconcile their context token counts.
+			usage.InputTokens = intPtr(anthropicResp.Usage.InputTokens)
+			usage.CacheReadInputTokens = intPtr(anthropicResp.Usage.CacheReadInputTokens)
+		}
 		events = append(events,
 			AnthropicStreamEvent{
 				Type: "message_delta",
 				Delta: &AnthropicMessageDelta{
 					StopReason: anthropicResp.StopReason,
 				},
-				Usage: &AnthropicMessageDeltaUsage{OutputTokens: anthropicResp.Usage.OutputTokens},
+				Usage: usage,
 			},
 			AnthropicStreamEvent{Type: "message_stop"},
 		)
