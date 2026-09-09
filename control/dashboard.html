@@ -94,6 +94,7 @@ async function showDashboard() {
   <span id="cards-subtitle" style="font-size:0.85rem;color:var(--muted)"></span>
 </div>
 <div class="cards" id="cards"></div>
+<div id="pricingStatus" role="status" style="font-size:0.8rem;color:var(--muted);margin:-0.5rem 0 1rem;overflow-wrap:anywhere"></div>
 <div class="chart-container"><canvas id="chart"></canvas></div>`;
   document.getElementById('buildCommit').textContent = `commit ${app.dataset.commit}`;
   document.getElementById('clientTimezone').textContent = `timezone ${clientTimeZone}`;
@@ -166,7 +167,7 @@ async function showDashboard() {
     if (currentDims.account) document.querySelector('.dim[data-dim="account"]').classList.add('active');
     if (currentDims.reasoningEffort) document.querySelector('.dim[data-dim="reasoningEffort"]').classList.add('active');
   }
-  document.getElementById('apiToken').onchange = e => { localStorage.setItem('c2a_token', e.target.value); fetchPricing(); fetchData(); };
+  document.getElementById('apiToken').onchange = e => { localStorage.setItem('c2a_token', e.target.value); fetchData(); };
 
   // Auto-refresh buttons
   const savedAR = localStorage.getItem('c2a_autoRefresh') || '300';
@@ -187,7 +188,6 @@ async function showDashboard() {
     btn.classList.remove('loading');
   };
 
-  await fetchPricing();
   fetchData();
 }
 
@@ -197,57 +197,65 @@ function setupAutoRefresh(secs) {
   if (secs > 0) { autoRefreshTimer = setInterval(fetchData, secs * 1000); }
 }
 
-// Dynamic pricing from LiteLLM via backend (filtered by available models)
-let PRICING = {};
+// Prices are requested for models in the historical usage, never the live catalog.
+let PRICING = Object.create(null);
 let pricingLoaded = false;
-async function fetchPricing() {
-  const token = document.getElementById('apiToken').value;
-  if (!token) return;
-  try {
-    const r = await fetch('/usage/pricing', { headers: { 'Authorization': 'Bearer ' + token } });
-    if (!r.ok) return;
+let pricingError = false;
+let dataRequestID = 0;
+
+function tokenPrice(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value * 1e6 : null;
+}
+
+async function fetchPricing(models, token) {
+  const result = Object.create(null);
+  const names = [...new Set(models.filter(m => typeof m === 'string' && m.trim()))].sort();
+  // Never send an empty model list: the API would fall back to the live catalog.
+  // Bound query size for long historical ranges with many models.
+  for (let i = 0; i < names.length; i += 50) {
+    const params = new URLSearchParams({ models: names.slice(i, i + 50).join(',') });
+    const r = await fetch(`/usage/pricing?${params}`, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!r.ok) throw new Error(`Pricing request failed (${r.status})`);
     const data = await r.json();
-    // Server returns only relevant models, convert per-token to per-MTok
-    PRICING = {};
-    for (const [model, info] of Object.entries(data)) {
-      if (typeof info !== 'object' || !info.input_cost_per_token) continue;
-      PRICING[model] = {
-        input: (info.input_cost_per_token || 0) * 1e6,
-        output: (info.output_cost_per_token || 0) * 1e6,
-        cached: (info.cache_read_input_token_cost || info.input_cost_per_token * 0.1) * 1e6,
-        cacheCreation: (info.cache_creation_input_token_cost || 0) * 1e6,
+    if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid pricing response');
+    for (const model of names.slice(i, i + 50)) {
+      const info = data[model];
+      if (!info || typeof info !== 'object' || Array.isArray(info)) continue;
+      result[model] = {
+        input: tokenPrice(info.input_cost_per_token),
+        output: tokenPrice(info.output_cost_per_token),
+        cached: tokenPrice(info.cache_read_input_token_cost),
+        cacheCreation: tokenPrice(info.cache_creation_input_token_cost),
       };
     }
-    pricingLoaded = true;
-  } catch(e) { console.warn('pricing fetch failed', e); }
+  }
+  return result;
 }
 
 function getPrice(model) {
-  if (!pricingLoaded) return null;
-  // Normalize: claude-opus-4.6 -> claude-opus-4-6
-  const norm = model.replace(/\./g, '-');
-  // Try candidates with various key formats used by LiteLLM
-  const candidates = [model, norm];
-  for (const m of [model, norm]) {
-    candidates.push('anthropic/' + m, 'openai/' + m);
-  }
-  // Strip -1m suffix
-  if (model.endsWith('-1m')) {
-    const base = model.slice(0, -3);
-    const baseNorm = base.replace(/\./g, '-');
-    candidates.push(base, baseNorm, 'anthropic/' + base, 'anthropic/' + baseNorm);
-  }
-  // Exact match on candidates
-  for (const c of candidates) {
-    if (PRICING[c]) return PRICING[c];
-  }
-  // Prefix match: find a key that starts with any candidate (handles date suffixes like -20250219)
-  for (const c of candidates) {
-    for (const key of Object.keys(PRICING)) {
-      if (key === c || key.startsWith(c + '-') || key.startsWith(c + '/')) return PRICING[key];
+  // The API returns prices keyed by the requested model name after normalization.
+  // Do not fuzzy-match other returned models or silently invent cache prices.
+  return pricingLoaded ? PRICING[model] || null : null;
+}
+
+function estimateCost(data) {
+  let cost = 0, pricedRequests = 0, totalRequests = 0;
+  const missingModels = new Set();
+  for (const d of data) {
+    totalRequests += d.request_count;
+    const p = getPrice(d.model);
+    const cached = d.tokens_cached || 0, writes = d.tokens_new_cache || 0;
+    // tokens_in includes both cache reads AND new cache writes.
+    const ordinary = Math.max(0, d.tokens_in - cached - writes);
+    const buckets = [[ordinary, p?.input], [cached, p?.cached], [writes, p?.cacheCreation], [d.tokens_out || 0, p?.output]];
+    if (!p || buckets.some(([tokens, price]) => tokens > 0 && price == null)) {
+      missingModels.add(d.model);
+      continue;
     }
+    cost += buckets.reduce((sum, [tokens, price]) => sum + tokens / 1e6 * (price ?? 0), 0);
+    pricedRequests += d.request_count;
   }
-  return null;
+  return { cost, pricedRequests, totalRequests, missingModels: [...missingModels].sort() };
 }
 
 function fmtUSD(n) { if(n>=1) return '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}); return '$'+n.toFixed(4); }
@@ -257,6 +265,7 @@ function fmtNum(n) { if(n>=1e9) return (n/1e9).toFixed(1)+'B'; if(n>=1e6) return
 function fmtLocalDate(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
 async function fetchData() {
+  const requestID = ++dataRequestID;
   let start, end;
   const now = new Date();
   const cr = String(currentRange);
@@ -290,19 +299,36 @@ async function fetchData() {
   if (isNaN(start.getTime()) || isNaN(end.getTime())) { console.error('Invalid date range:', start, end, 'range:', cr); return; }
   const token = document.getElementById('apiToken').value;
   const status = document.getElementById('tokenStatus');
-  if (!token) { status.className = 'status err'; status.textContent = '⚠ Token required'; return; }
+  if (!token) { rawData = []; PRICING = Object.create(null); pricingLoaded = false; pricingError = true; render(); status.className = 'status err'; status.textContent = '⚠ Token required'; return; }
   localStorage.setItem('c2a_token', token);
   try {
     const params = new URLSearchParams({ start: fmtLocalDate(start), end: fmtLocalDate(end), timezone: clientTimeZone });
     const r = await fetch(`/usage?${params.toString()}`, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (requestID !== dataRequestID) return;
     if (r.status === 401 || r.status === 403) { status.className = 'status err'; status.textContent = '✗ Invalid token'; return; }
     const data = await r.json();
-    if (data.error) { status.className = 'status err'; status.textContent = data.error; return; }
+    if (requestID !== dataRequestID) return;
+    if (data?.error) { status.className = 'status err'; status.textContent = data.error; return; }
+    if (!r.ok || !Array.isArray(data)) throw new Error('Invalid usage response');
     status.className = 'status ok'; status.textContent = '✓';
     rawData = data;
+    PRICING = Object.create(null);
+    pricingLoaded = false;
+    pricingError = false;
     populateFilters();
     render();
-  } catch(e) { status.className = 'status err'; status.textContent = e.message; }
+    try {
+      const prices = await fetchPricing(data.map(d => d.model), token);
+      if (requestID !== dataRequestID) return;
+      PRICING = prices;
+      pricingLoaded = true;
+    } catch (e) {
+      if (requestID !== dataRequestID) return;
+      pricingError = true;
+      console.warn('pricing fetch failed', e);
+    }
+    render();
+  } catch(e) { if (requestID === dataRequestID) { status.className = 'status err'; status.textContent = e.message; } }
 }
 
 function populateFilters() {
@@ -350,23 +376,28 @@ function renderCards(data) {
   const totalOut = data.reduce((a,d) => a + d.tokens_out, 0);
   const totalNoncached = totalIn - totalCached;
   const cacheRate = totalIn > 0 ? (totalCached / totalIn * 100).toFixed(1) : '0.0';
-  // estimated cost per model
-  let estCost = 0;
-  data.forEach(d => {
-    const p = getPrice(d.model);
-    if (!p) return;
-    const noncached = d.tokens_in - d.tokens_cached;
-    estCost += (noncached / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output;
-  });
+  const estimate = estimateCost(data);
+  const incomplete = estimate.missingModels.length > 0;
+  const costLabel = pricingLoaded && incomplete ? 'Est. Cost (partial)' : 'Est. Cost';
+  const costValue = !pricingLoaded ? (pricingError ? 'Unavailable' : 'Loading…')
+    : incomplete && estimate.pricedRequests === 0 ? 'Unavailable' : fmtUSD(estimate.cost);
+  const pricingStatus = document.getElementById('pricingStatus');
+  if (!pricingLoaded) {
+    pricingStatus.textContent = pricingError ? 'Prices unavailable — cost not calculated. Refresh to retry.' : 'Loading prices for historical models…';
+  } else {
+    const coverage = `Priced ${estimate.pricedRequests.toLocaleString('en-US')} / ${estimate.totalRequests.toLocaleString('en-US')} requests.`;
+    pricingStatus.textContent = coverage + (incomplete ? ` Missing required prices: ${estimate.missingModels.join(', ')}. Shown cost is a subtotal only.` : '')
+      + ' Current base-rate estimate, not a bill; long-context tiers and cache TTL pricing are not modeled.';
+  }
   document.getElementById('cards-subtitle').innerHTML = `Requests: <span style="font-weight:700;color:var(--text)">${fmtNum(totalReqs)}</span>`;
   document.getElementById('cards').innerHTML = `
     <div class="card"><div class="label">Total Input</div><div class="value">${fmtNum(totalIn)}</div></div>
-    <div class="card"><div class="label">Input (non-cached)</div><div class="value">${fmtNum(totalNoncached)}</div></div>
+    <div class="card"><div class="label" title="Total input minus cache reads; includes cache writes shown separately">Input (non-cached)</div><div class="value">${fmtNum(totalNoncached)}</div></div>
     <div class="card"><div class="label">Cached Input</div><div class="value">${fmtNum(totalCached)}</div></div>
     <div class="card"><div class="label">Cache Write</div><div class="value">${fmtNum(totalNewCache)}</div></div>
     <div class="card"><div class="label">Output</div><div class="value">${fmtNum(totalOut)}</div></div>
     <div class="card"><div class="label">Cache Rate</div><div class="value">${cacheRate}%</div></div>
-    <div class="card"><div class="label">Est. Cost</div><div class="value" style="color:#f59e0b">${fmtUSD(estCost)}</div></div>`;
+    <div class="card"><div class="label">${costLabel}</div><div class="value" style="color:#f59e0b">${costValue}</div></div>`;
 }
 
 function aggrKey(dateStr) {
@@ -393,12 +424,13 @@ function renderChart(data) {
     k = parts.length ? parts.join(' / ') : 'total';
     dims.add(k);
     if (!byBucket[bucket]) byBucket[bucket] = {};
-    if (!byBucket[bucket][k]) byBucket[bucket][k] = { cached: 0, noncached: 0, output: 0, cost: 0 };
+    if (!byBucket[bucket][k]) byBucket[bucket][k] = { cached: 0, noncached: 0, output: 0, cost: 0, incomplete: false };
     byBucket[bucket][k].cached += d.tokens_cached;
     byBucket[bucket][k].noncached += (d.tokens_in - d.tokens_cached);
     byBucket[bucket][k].output += d.tokens_out;
-    const p = getPrice(d.model);
-    if (p) { const nc = d.tokens_in - d.tokens_cached; byBucket[bucket][k].cost += (nc / 1e6) * p.input + (d.tokens_cached / 1e6) * p.cached + ((d.tokens_new_cache || 0) / 1e6) * p.cacheCreation + (d.tokens_out / 1e6) * p.output; }
+    const estimate = estimateCost([d]);
+    byBucket[bucket][k].cost += estimate.cost;
+    byBucket[bucket][k].incomplete ||= !pricingLoaded || estimate.missingModels.length > 0;
   });
   const buckets = Object.keys(byBucket).sort();
   const colors = ['#0ea5e9','#7c3aed','#f59e0b','#10b981','#ef4444','#ec4899','#6366f1','#14b8a6'];
@@ -426,15 +458,18 @@ function renderChart(data) {
   stackIds.forEach(stk => {
     stackTotals[stk] = {};
     buckets.forEach((_, bi) => {
-      let cached = 0, noncached = 0, cost = 0;
+      let cached = 0, noncached = 0, cost = 0, incomplete = false;
       datasets.filter(ds => ds.stack === stk).forEach(ds => {
         if (ds.label.includes('cached') && !ds.label.includes('non-cached')) cached += (ds.data[bi] || 0);
         else noncached += (ds.data[bi] || 0);
       });
       // get cost from byBucket
       const dim = [...dims].sort()[stackIds.indexOf(stk)];
-      if (dim && byBucket[buckets[bi]]?.[dim]) cost = byBucket[buckets[bi]][dim].cost;
-      stackTotals[stk][bi] = { total: cached + noncached, cached, noncached, cost };
+      if (dim && byBucket[buckets[bi]]?.[dim]) {
+        cost = byBucket[buckets[bi]][dim].cost;
+        incomplete = byBucket[buckets[bi]][dim].incomplete;
+      }
+      stackTotals[stk][bi] = { total: cached + noncached, cached, noncached, cost, incomplete };
     });
   });
 
@@ -457,7 +492,8 @@ function renderChart(data) {
           if (!info || info.total === 0) return;
           if (!labelsByBucket[bi]) labelsByBucket[bi] = [];
           let line1 = fmtNum(info.total);
-          if (info.cost > 0) line1 += ', ' + fmtUSD(info.cost);
+          if (info.cost > 0) line1 += ', ' + fmtUSD(info.cost) + (info.incomplete ? ' (partial)' : '');
+          else if (info.incomplete) line1 += ', cost N/A';
           let line2 = null;
           if (info.cached > 0) {
             const pct = (info.cached / info.total * 100).toFixed(0);
