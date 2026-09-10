@@ -12,6 +12,8 @@
 
 ### Bug Fixes
 
+- Allow Anthropic SDK `X-Stainless-Helper-Method` and `X-Stainless-Helper` preflights used by Office streaming/tool helpers. Log rejected preflight reasons and bounded header names without credential values or request content.
+
 - Preserve CORS/Vary headers through load-balanced gateway response buffering and retries, including successful model discovery and streaming replies.
 
 - Scope direct-route model catalogs/capability lookups to the requested account and resolve configured gateway aliases before model-based account filtering.

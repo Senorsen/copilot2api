@@ -448,3 +448,5 @@ that targets GPT is still GPT inference, not Claude.
 Container CI uses versioned Beijing-time timestamp/branch/short-SHA tags only, builds complete images from source, and emits no Actions binary or build-record artifact. Explicit GitHub releases can still attach binaries to the release.
 
 For upstream catalogs without a creation date, Anthropic model entries use the Unix epoch (`1970-01-01T00:00:00Z`) as an unknown-date compatibility value, not a claimed release date.
+
+Office streaming CORS includes `X-Stainless-Helper-Method` and `X-Stainless-Helper` explicitly. Rejected preflights log only the reason and a bounded header name, not API tokens, header values, or request content.

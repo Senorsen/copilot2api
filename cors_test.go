@@ -112,3 +112,35 @@ func TestCORSDisabledAndWildcard(t *testing.T) {
 		}
 	}
 }
+
+func TestOfficeSDKStreamHelperPreflight(t *testing.T) {
+	c, e := parseCORSConfig("", "claude-office", "", "")
+	if e != nil {
+		t.Fatal(e)
+	}
+	h := c.wrap(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("preflight reached authentication/upstream") }))
+	for _, helper := range []string{"X-Stainless-Helper-Method", "x-stainless-helper", "X-Stainless-Helper-Method, x-stainless-helper"} {
+		r := httptest.NewRequest("OPTIONS", "/api/account/v1/messages", nil)
+		r.Header.Set("Origin", "https://pivot.claude.ai")
+		r.Header.Set("Access-Control-Request-Method", "POST")
+		r.Header.Set("Access-Control-Request-Headers", "authorization,content-type,anthropic-version,anthropic-dangerous-direct-browser-access,x-stainless-lang,x-stainless-package-version,x-stainless-runtime,x-stainless-runtime-version,x-stainless-os,x-stainless-arch,x-stainless-retry-count,x-stainless-timeout,"+helper)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 204 {
+			t.Fatalf("SDK stream helper preflight: %d %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Header().Get("Access-Control-Allow-Headers"), "x-stainless-helper-method") {
+			t.Fatal("stream helper not explicitly allowed")
+		}
+	}
+}
+func TestCORSDiagnosticHeaderNameIsBounded(t *testing.T) {
+	if corsDiagnosticHeaderName("x-custom") != "x-custom" {
+		t.Fatal("valid name missing")
+	}
+	for _, name := range []string{"", strings.Repeat("a", 81), "authorization: Bearer secret", "evil\nlog", "x_"} {
+		if corsDiagnosticHeaderName(name) != "(invalid)" {
+			t.Fatal("unsafe diagnostic name accepted")
+		}
+	}
+}

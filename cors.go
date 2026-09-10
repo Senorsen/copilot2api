@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sort"
@@ -12,7 +13,7 @@ import (
 // Presets can be combined with arbitrary explicit origins; disabled by default.
 var corsPresets = map[string][]string{"claude-office": {"https://pivot.claude.ai"}}
 
-const corsDefaultHeaders = "authorization,x-api-key,content-type,anthropic-version,anthropic-beta,anthropic-dangerous-direct-browser-access,x-stainless-lang,x-stainless-package-version,x-stainless-os,x-stainless-arch,x-stainless-runtime,x-stainless-runtime-version,x-stainless-retry-count,x-stainless-timeout"
+const corsDefaultHeaders = "authorization,x-api-key,content-type,anthropic-version,anthropic-beta,anthropic-dangerous-direct-browser-access,x-stainless-lang,x-stainless-package-version,x-stainless-os,x-stainless-arch,x-stainless-runtime,x-stainless-runtime-version,x-stainless-retry-count,x-stainless-timeout,x-stainless-helper-method,x-stainless-helper"
 
 type corsConfig struct {
 	origins     map[string]bool
@@ -100,12 +101,14 @@ func (c corsConfig) wrap(next http.Handler) http.Handler {
 		if preflight {
 			method := r.Header.Get("Access-Control-Request-Method")
 			if !allowed || (method != "GET" && method != "POST") {
+				slog.Warn("CORS preflight rejected", "reason", "origin_or_method")
 				http.Error(w, "CORS preflight not allowed", http.StatusForbidden)
 				return
 			}
 			for _, h := range strings.Split(r.Header.Get("Access-Control-Request-Headers"), ",") {
 				h = strings.ToLower(strings.TrimSpace(h))
 				if h != "" && !c.headers[h] {
+					slog.Warn("CORS preflight rejected", "reason", "request_header", "header_name", corsDiagnosticHeaderName(h))
 					http.Error(w, "CORS request header not allowed", http.StatusForbidden)
 					return
 				}
@@ -118,4 +121,18 @@ func (c corsConfig) wrap(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Log only a bounded valid header NAME supplied by the browser preflight,
+// never credentials, actual header values, URL queries, or request bodies.
+func corsDiagnosticHeaderName(name string) string {
+	if len(name) == 0 || len(name) > 80 {
+		return "(invalid)"
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+			return "(invalid)"
+		}
+	}
+	return name
 }
