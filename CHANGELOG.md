@@ -12,6 +12,8 @@
 
 ### Bug Fixes
 
+- Preserve CORS/Vary headers through load-balanced gateway response buffering and retries, including successful model discovery and streaming replies.
+
 - Scope direct-route model catalogs/capability lookups to the requested account and resolve configured gateway aliases before model-based account filtering.
 - Forward `anthropic-version` on native and converted Messages routes; keep streaming responses compatible with CORS.
 

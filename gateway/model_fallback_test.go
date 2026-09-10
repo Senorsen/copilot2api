@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -250,8 +251,47 @@ func TestGatewayConfiguredAliasUsesRealAccountModel(t *testing.T) {
 	handler := NewHandler(newGatewayAccountManager(t, testGatewayAccount{id: "mapped", username: "mapped", baseURL: server.URL}), nil, mc)
 	r := httptest.NewRequest("POST", "/gw/api/v1/messages", strings.NewReader(`{"model":"claude-opus-5[1m]","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"stream":false}`))
 	w := httptest.NewRecorder()
+	w.Header().Set("Access-Control-Allow-Origin", "https://pivot.claude.ai")
 	handler.ServeHTTP(w, r)
+	if w.Header().Get("Access-Control-Allow-Origin") != "https://pivot.claude.ai" {
+		t.Fatal("gateway removed CORS")
+	}
 	if w.Code != 200 || calls.Load() != 1 || !strings.Contains(w.Body.String(), `"model":"claude-opus-5[1m]"`) {
 		t.Fatalf("code %d calls %d body %s", w.Code, calls.Load(), w.Body)
+	}
+}
+
+func TestDeferredResponsePreservesOuterCORSHeaders(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			dst := httptest.NewRecorder()
+			dst.Header().Set("Access-Control-Allow-Origin", "https://pivot.claude.ai")
+			dst.Header().Add("Vary", "Origin")
+			dst.Header().Set("X-Request-Id", "outer-id")
+			rejected := newDeferredResponseWriter(dst)
+			rejected.Header().Set("X-Attempt", "rejected")
+			rejected.WriteHeader(400)
+			_, _ = rejected.Write([]byte(`{"error":"unsupported"}`))
+			winner := newDeferredResponseWriter(dst)
+			if winner.Header().Get("X-Attempt") != "" {
+				t.Fatal("attempt contamination")
+			}
+			winner.Header().Set("Content-Type", "application/json")
+			_, _ = winner.Write([]byte("ok"))
+			if stream {
+				winner.Flush()
+			} else {
+				winner.flushCaptured()
+			}
+			if dst.Code != 200 || dst.Header().Get("Access-Control-Allow-Origin") != "https://pivot.claude.ai" || dst.Header().Get("Vary") != "Origin" || dst.Header().Get("X-Request-Id") != "outer-id" {
+				t.Fatalf("lost middleware headers: %v", dst.Header())
+			}
+			if stream && !dst.Flushed {
+				t.Fatal("stream not flushed")
+			}
+			if dst.Body.String() != "ok" {
+				t.Fatal(dst.Body.String())
+			}
+		})
 	}
 }

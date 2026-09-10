@@ -76,9 +76,18 @@ jobs:
     needs: [build]
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+      - name: Build image binaries on runner (no artifact transfer)
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -ldflags="-s -w -X main.commit=$GITHUB_SHA" -o "dist/copilot2api-linux-$arch" .
+          done
       - name: Smoke test image
         run: |
-          docker build --build-arg COMMIT_SHA=$GITHUB_SHA -f Dockerfile -t copilot2api-smoke .
+          docker build --build-arg TARGETOS=linux --build-arg TARGETARCH=amd64 -f Dockerfile.ci -t copilot2api-smoke .
           docker run --rm copilot2api-smoke --version
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -104,8 +113,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile
-          build-args: COMMIT_SHA=${{ github.sha }}
+          file: Dockerfile.ci
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}

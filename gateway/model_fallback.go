@@ -259,7 +259,9 @@ type deferredResponseWriter struct {
 }
 
 func newDeferredResponseWriter(dst http.ResponseWriter) *deferredResponseWriter {
-	return &deferredResponseWriter{dst: dst, header: make(http.Header)}
+	// Preserve outer middleware headers (CORS/Vary/request IDs) through both
+	// buffered responses and streaming commits; isolate attempt-local headers.
+	return &deferredResponseWriter{dst: dst, header: dst.Header().Clone()}
 }
 
 func (w *deferredResponseWriter) Header() http.Header { return w.header }
