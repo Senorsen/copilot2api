@@ -12,6 +12,8 @@
 
 ### Bug Fixes
 
+- Preserve required empty text/thinking/signature strings and tool-use input objects in Anthropic JSON/SSE. This prevents Office streaming callbacks from receiving `undefined` for empty thinking deltas, avoids missing-field `undefined`/`NaN` thinking state in SDK consumers such as Claude Code, and retains reasoning blocks and signatures.
+
 - Allow Anthropic SDK `X-Stainless-Helper-Method` and `X-Stainless-Helper` preflights used by Office streaming/tool helpers. Log rejected preflight reasons and bounded header names without credential values or request content.
 
 - Preserve CORS/Vary headers through load-balanced gateway response buffering and retries, including successful model discovery and streaming replies.

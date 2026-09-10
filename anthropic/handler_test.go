@@ -330,3 +330,70 @@ func TestConfiguredAliasesRouteAndPreserveClientModel(t *testing.T) {
 		}
 	}
 }
+
+// Model-empty reasoning is legal upstream: it must survive JSON encoding as an
+// empty string, not a missing field handed to SDK thinking callbacks.
+func TestHandlerSSEEmptyThinkingThenTextWire(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/models" {
+			fmt.Fprint(w, `{"data":[{"id":"gpt-6-astra","supported_endpoints":["/responses"]}]}`)
+			return
+		}
+		if r.URL.Path != "/responses" {
+			t.Errorf("unexpected upstream path %s", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, data := range []string{
+			`{"type":"response.created","response":{"id":"resp_wire","model":"gpt-6-astra"}}`,
+			`{"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_wire","encrypted_content":"opaque-test","summary":[]}}`,
+			`{"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"Synthetic answer."}`,
+			`{"type":"response.completed","response":{"id":"resp_wire","model":"gpt-6-astra","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Synthetic answer."}]}],"usage":{"input_tokens":7,"output_tokens":3}}}`,
+		} {
+			fmt.Fprintf(w, "data: %s\n\n", data)
+		}
+	}))
+	defer fake.Close()
+	tp := &statsTestTokenProvider{baseURL: fake.URL}
+	mc := models.NewCacheWithAliases(func() *upstream.Client { return upstream.NewClient(tp, nil) }, time.Minute, models.Aliases{"claude-opus-5": "gpt-6-astra"})
+	h := NewHandler(tp, nil, mc)
+	r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"claude-opus-5","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"synthetic"}]}`))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 || !w.Flushed {
+		t.Fatalf("SSE status/flush %d/%v", w.Code, w.Flushed)
+	}
+	found := false
+	types := []string{}
+	for _, line := range strings.Split(w.Body.String(), "\n") {
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		var event map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimPrefix(line, "data: ")), &event); err != nil {
+			t.Fatal(err)
+		}
+		kind, _ := event["type"].(string)
+		types = append(types, kind)
+		if kind == "content_block_delta" {
+			d := event["delta"].(map[string]any)
+			if d["type"] == "thinking_delta" {
+				v, ok := d["thinking"].(string)
+				if !ok || v != "" {
+					t.Fatalf("undefined instead of empty thinking delta: %s", line)
+				}
+				found = true
+			}
+		}
+		if kind == "message_start" {
+			m := event["message"].(map[string]any)
+			if m["model"] != "claude-opus-5" {
+				t.Fatal("client model alias lost")
+			}
+		}
+	}
+	if !found || len(types) == 0 || types[len(types)-1] != "message_stop" {
+		t.Fatalf("incomplete thinking/text stream: %v", types)
+	}
+}
