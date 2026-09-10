@@ -148,6 +148,17 @@ func (h *Handler) handleModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	respData, err = h.modelsCache.AddAliases(respData)
+	if err != nil {
+		WriteOpenAIError(w, http.StatusBadGateway, OpenAIErrorTypeServerError, "Invalid upstream model list")
+		return
+	}
+	if r.Header.Get("anthropic-version") != "" || r.Header.Get("Origin") == "https://pivot.claude.ai" || r.URL.Query().Get("api_format") == "anthropic" {
+		if err := writeAnthropicModels(w, r, respData); err != nil {
+			WriteOpenAIError(w, http.StatusBadRequest, OpenAIErrorTypeInvalidRequest, err.Error())
+		}
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(respData)
 }

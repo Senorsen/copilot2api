@@ -44,6 +44,9 @@ type Cache struct {
 	// or nil if no client is currently available. It is invoked on every
 	// cache-miss fetch so the cache can pick up accounts that were added
 	// after process start.
+	aliases          Aliases
+	scopesMu         sync.Mutex
+	scopes           map[string]*Cache
 	upstreamProvider func() *upstream.Client
 }
 

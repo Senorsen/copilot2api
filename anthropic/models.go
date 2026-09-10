@@ -121,7 +121,7 @@ func isTokenError(err error) bool {
 // On token-related errors it retries up to 2 times (3 attempts total) with a
 // 1 second delay between attempts.
 func (h *Handler) getModelInfo(ctx context.Context, modelID string) (*models.Info, bool) {
-	modelID = resolveModelAlias(modelID)
+	// The caller already resolved configured aliases and built-in spellings.
 
 	const maxRetries = 2
 	var err error

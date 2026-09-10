@@ -185,14 +185,18 @@ func (h *Handler) serveWithAccountFallback(
 		attemptRequest.URL = &attemptURL
 		attemptRequest.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
+		mc := h.mc
+		if mc != nil {
+			mc = mc.ForProvider(tp, h.transport)
+		}
 		attemptWriter := newDeferredResponseWriter(w)
 		switch {
 		case remainder == "/v1/messages" || strings.HasPrefix(remainder, "/v1/messages"):
-			handler := anthropic.NewHandler(tp, h.transport, h.mc)
+			handler := anthropic.NewHandler(tp, h.transport, mc)
 			handler.StatsRecorder = h.Recorder
 			handler.ServeHTTP(attemptWriter, attemptRequest)
 		default:
-			handler := proxy.NewHandler(tp, h.transport, h.mc, nil)
+			handler := proxy.NewHandler(tp, h.transport, mc, nil)
 			handler.StatsRecorder = h.Recorder
 			handler.ServeHTTP(attemptWriter, attemptRequest)
 		}

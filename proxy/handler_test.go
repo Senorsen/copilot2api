@@ -468,3 +468,59 @@ func TestHandlePassthrough_StreamingNetworkFailure_Returns502(t *testing.T) {
 		t.Fatalf("expected error type %q, got %q", OpenAIErrorTypeServerError, errResp.Error.Type)
 	}
 }
+
+func TestModelsOfficeAndOpenAIWithConfiguredAliases(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"list","data":[{"id":"gpt-6-astra","name":"GPT-6 Astra"}]}`))
+	}))
+	defer server.Close()
+	tp := &stubTokenProvider{baseURL: server.URL}
+	mc := models.NewCacheWithAliases(func() *upstream.Client { return upstream.NewClient(tp, nil) }, time.Minute, models.Aliases{"claude-opus-5": "gpt-6-astra", "claude-opus-5[1m]": "gpt-6-astra"})
+	h := NewHandler(tp, nil, mc, nil)
+	for _, mode := range []string{"openai", "version", "origin", "query"} {
+		t.Run(mode, func(t *testing.T) {
+			path := "/v1/models"
+			if mode == "query" {
+				path += "?api_format=anthropic"
+			}
+			r := httptest.NewRequest("GET", path, nil)
+			if mode == "origin" {
+				r.Header.Set("Origin", "https://pivot.claude.ai")
+			}
+			if mode == "version" {
+				r.Header.Set("anthropic-version", "2023-06-01")
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			var d map[string]any
+			if e := json.Unmarshal(w.Body.Bytes(), &d); e != nil || w.Code != 200 {
+				t.Fatal(w.Code, w.Body)
+			}
+			items := d["data"].([]any)
+			if len(items) != 3 {
+				t.Fatal(d)
+			}
+			ids := map[string]bool{}
+			for _, v := range items {
+				m := v.(map[string]any)
+				ids[m["id"].(string)] = true
+				if mode != "openai" && m["type"] != "model" {
+					t.Fatal(m)
+				}
+			}
+			if !ids["claude-opus-5"] || !ids["claude-opus-5[1m]"] {
+				t.Fatal(ids)
+			}
+			if mode == "openai" {
+				if d["object"] != "list" {
+					t.Fatal(d)
+				}
+			} else {
+				if _, ok := d["has_more"]; !ok {
+					t.Fatal(d)
+				}
+			}
+		})
+	}
+}

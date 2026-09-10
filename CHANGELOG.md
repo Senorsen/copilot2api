@@ -4,6 +4,20 @@
 
 ### Features
 
+- Publish complete container images with dated commit tags only (no `latest`), without Actions binary/build-record artifacts; release binaries remain attached only to explicit releases.
+
+- Add opt-in data-plane CORS with multiple explicit origins, composable presets (`claude-office`), configurable extra headers/credentials, authenticated actual requests and pre-authentication OPTIONS handling.
+- Add exact environment-configured Anthropic model aliases, including multiple client IDs mapping to one upstream model. Advertise available aliases in model discovery while retaining target identity/metadata and accurate upstream usage accounting.
+- Serve Anthropic-compatible model discovery/pagination for Office and version-header clients; preserve the existing OpenAI catalog for other clients.
+
+### Bug Fixes
+
+- Scope direct-route model catalogs/capability lookups to the requested account and resolve configured gateway aliases before model-based account filtering.
+- Forward `anthropic-version` on native and converted Messages routes; keep streaming responses compatible with CORS.
+
+
+### Features
+
 - Add multi-client data-plane authentication with `API_TOKENS` (`id:token` entries separated by whitespace), per-client usage aggregation and dashboard filtering. `API_TOKEN` remains supported, and startup rejects configuring both variables together.
 - Force 1M context window for capable Claude models (opus/sonnet 4.6+): always inject the `anthropic-beta: context-1m-2025-08-07` header upstream so requests no longer fall back to the 200k hard limit. Replaces the old `-1m` model-suffix swap (those variants no longer exist in Copilot's model list). Applies to native `/v1/messages`, `/chat/completions`, and `/responses` routes; merges with any client-provided beta header.
 - Add debug request capture: set `COPILOT2API_DEBUG_MODELS=gpt-5.4,gpt-5.5` to save request bodies as formatted JSON under `{dataDir}/debug/{model}/`. Captures both OpenAI and Anthropic API requests. One file per request, named `{datetime}-{rand4hex}.json`

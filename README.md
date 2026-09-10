@@ -393,3 +393,58 @@ go build -o copilot2api .  # Build
 ## License
 
 MIT
+
+### Browser clients / Claude for Office
+
+CORS is disabled by default and applies only to the data-plane server (not the
+admin/control server). Configure any number of exact origins, and/or combine
+named presets. Lists accept comma/whitespace separators and are deduplicated.
+
+```sh
+COPILOT2API_CORS_PRESETS=claude-office
+COPILOT2API_CORS_ORIGINS=https://app.example.com,https://another.example.com
+# Optional additional request headers (Authorization is explicitly built in):
+COPILOT2API_CORS_ALLOW_HEADERS=x-company-client
+COPILOT2API_CORS_ALLOW_CREDENTIALS=false
+```
+
+The `claude-office` preset allows `https://pivot.claude.ai`. Unknown presets,
+malformed origins, alias chains and invalid configuration fail startup instead
+of silently broadening access. `*` is an explicit opt-in and cannot be combined
+with credentials. Preflight is handled before API-token authentication; real
+GET/POST requests still require a valid token. CORS headers also cover 401/4xx/5xx
+and streaming responses. Remove duplicate reverse-proxy CORS rules after enabling
+the built-in policy so the browser receives one authoritative origin header.
+
+For Anthropic Office clients, use the normal account base URL
+`https://your-host/api/{account_id}` (including any reverse-proxy prefix).
+`GET /v1/models` returns the Anthropic list/pagination schema when the request
+has `anthropic-version`, has the Office taskpane Origin, or explicitly sets
+`?api_format=anthropic`. Existing OpenAI clients retain the original list schema.
+`POST /v1/messages` supports both streaming and non-streaming; `anthropic-version`
+is forwarded to the actual upstream route. Model metadata is cached per account
+instead of using another account's catalog for a direct route.
+
+### Configurable Anthropic model aliases
+
+```sh
+COPILOT2API_MODEL_ALIASES='{"claude-opus-5":"gpt-6-astra","claude-opus-5[1m]":"gpt-6-astra","my-sol":"gpt-5.6-sol"}'
+```
+
+This is an exact alias-to-target JSON object, with no fixed number of mappings.
+Several aliases can target one model; chains/cycles, duplicate keys and invalid
+IDs are rejected. Configured aliases take precedence over the built-in Claude
+spelling aliases. They apply to Anthropic `/v1/messages` on direct account and
+load-balanced gateway routes **before** capability routing and account selection.
+Unconfigured IDs retain existing behavior. OpenAI/Gemini requests are unchanged.
+
+Both model-list formats include each alias whose real target is available. Alias
+entries preserve target metadata and show `alias → real target` plus
+`upstream_model`; `[1m]` in an alias does not manufacture a million-token capability.
+Responses retain the requested alias while `X-Upstream-Model`, routing and usage
+accounting identify the real target. For example, an alias called `claude-opus-5`
+that targets GPT is still GPT inference, not Claude.
+
+Container CI uses versioned Beijing-time timestamp/branch/short-SHA tags only, builds complete images from source, and emits no Actions binary or build-record artifact. Explicit GitHub releases can still attach binaries to the release.
+
+For upstream catalogs without a creation date, Anthropic model entries use the Unix epoch (`1970-01-01T00:00:00Z`) as an unknown-date compatibility value, not a claimed release date.

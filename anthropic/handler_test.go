@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -259,5 +260,73 @@ func TestNormalizeNativeMessagesBody_RemovesCacheControlScope(t *testing.T) {
 	messageCacheControl := parts[0].(map[string]interface{})["cache_control"].(map[string]interface{})
 	if _, ok := messageCacheControl["scope"]; ok {
 		t.Fatalf("message cache_control.scope still present")
+	}
+}
+
+func TestConfiguredAliasesRouteAndPreserveClientModel(t *testing.T) {
+	for _, endpoint := range []string{"/chat/completions", "/responses", "/v1/messages"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", endpoint, stream), func(t *testing.T) {
+				var seenModel, seenVersion, seenBeta string
+				fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/models" {
+						_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "gpt-6-astra", "supported_endpoints": []string{endpoint}}}})
+						return
+					}
+					if r.URL.Path != endpoint {
+						t.Errorf("endpoint %s want %s", r.URL.Path, endpoint)
+						http.NotFound(w, r)
+						return
+					}
+					var body map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					seenModel, _ = body["model"].(string)
+					seenVersion = r.Header.Get("anthropic-version")
+					seenBeta = r.Header.Get("anthropic-beta")
+					if stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+						switch endpoint {
+						case "/chat/completions":
+							fmt.Fprint(w, "data: {\"id\":\"test\",\"model\":\"gpt-6-astra\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"test\",\"model\":\"gpt-6-astra\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+						case "/responses":
+							fmt.Fprint(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\",\"model\":\"gpt-6-astra\"}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"model\":\"gpt-6-astra\",\"status\":\"completed\",\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n")
+						case "/v1/messages":
+							fmt.Fprint(w, "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"model\":\"gpt-6-astra\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+						}
+						return
+					}
+					w.Header().Set("Content-Type", "application/json")
+					switch endpoint {
+					case "/chat/completions":
+						fmt.Fprint(w, `{"id":"test","model":"gpt-6-astra","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":1}}`)
+					case "/responses":
+						fmt.Fprint(w, `{"id":"resp_test","model":"gpt-6-astra","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}],"usage":{"input_tokens":5,"output_tokens":1}}`)
+					case "/v1/messages":
+						fmt.Fprint(w, `{"id":"msg_test","type":"message","role":"assistant","model":"gpt-6-astra","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":1}}`)
+					}
+				}))
+				defer fake.Close()
+				tp := &statsTestTokenProvider{baseURL: fake.URL}
+				mc := models.NewCacheWithAliases(func() *upstream.Client { return upstream.NewClient(tp, nil) }, time.Minute, models.Aliases{"claude-opus-5[1m]": "gpt-6-astra"})
+				h := NewHandler(tp, nil, mc)
+				body := fmt.Sprintf(`{"model":"claude-opus-5[1m]","max_tokens":16,"stream":%v,"messages":[{"role":"user","content":"hi"}]}`, stream)
+				r := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(body))
+				r.Header.Set("anthropic-version", "2023-06-01")
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, r)
+				if w.Code != 200 {
+					t.Fatalf("%d %s", w.Code, w.Body.String())
+				}
+				if seenModel != "gpt-6-astra" || seenVersion != "2023-06-01" || strings.Contains(seenBeta, "context-1m") {
+					t.Fatalf("model/version/beta %q %q %q", seenModel, seenVersion, seenBeta)
+				}
+				if !strings.Contains(w.Body.String(), `"model":"claude-opus-5[1m]"`) {
+					t.Fatalf("client alias not preserved: %s", w.Body.String())
+				}
+				if w.Header().Get("X-Upstream-Model") != "gpt-6-astra" {
+					t.Fatal("upstream transparency header missing")
+				}
+			})
+		}
 	}
 }

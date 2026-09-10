@@ -97,7 +97,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	originalModel := anthropicReq.Model
 
 	// Resolve model alias (e.g. claude-haiku-4-5-20251001 -> claude-haiku-4.5)
-	resolvedModel := resolveModelAlias(anthropicReq.Model)
+	resolvedModel, configuredAlias := h.models.ResolveAlias(anthropicReq.Model)
+	if !configuredAlias {
+		resolvedModel = resolveModelAlias(anthropicReq.Model)
+	}
 
 	// Force 1M context window. GitHub Copilot no longer exposes separate "-1m"
 	// model IDs; instead the 1M window is unlocked via the anthropic-beta header
@@ -110,6 +113,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if modelChanged {
 		slog.Debug("resolved model alias", "from", anthropicReq.Model, "to", resolvedModel)
 		anthropicReq.Model = resolvedModel
+	}
+
+	if configuredAlias {
+		setUpstreamModelHeader(w, resolvedModel)
 	}
 
 	// Debug capture: save request body for configured models
@@ -261,6 +268,7 @@ func (h *Handler) validateRequest(req AnthropicMessagesRequest) error {
 func (h *Handler) handleNativeMessagesPassthrough(w http.ResponseWriter, r *http.Request, body []byte, model string, originalModel string, stream bool, usage *tokenUsage) {
 	// Force the 1M context beta header for capable models, merging with any beta the client already sent.
 	beta1m := mergeContext1MBeta(model, r.Header.Get("anthropic-beta"))
+	beta1m = messageHeaders(r, beta1m)
 	if stream {
 		resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/v1/messages", Body: body, Stream: true, QueryString: r.URL.RawQuery, ExtraHeaders: beta1m})
 		if err != nil {
@@ -400,7 +408,7 @@ func (h *Handler) handleViaChatCompletions(w http.ResponseWriter, r *http.Reques
 
 func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest, originalModel string, usage *tokenUsage) {
 	openAIReq.Stream = false
-	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, ExtraHeaders: context1mHeaders(openAIReq.Model)})
+	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, ExtraHeaders: messageHeaders(r, context1mHeaders(openAIReq.Model))})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -447,7 +455,7 @@ func (h *Handler) handleNonStreamingRequest(w http.ResponseWriter, r *http.Reque
 
 func (h *Handler) handleStreamingRequest(w http.ResponseWriter, r *http.Request, openAIReq OpenAIChatCompletionsRequest, originalModel string, usage *tokenUsage) {
 	openAIReq.Stream = true
-	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, Stream: true, ExtraHeaders: context1mHeaders(openAIReq.Model)})
+	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/chat/completions", Body: openAIReq, Stream: true, ExtraHeaders: messageHeaders(r, context1mHeaders(openAIReq.Model))})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -522,7 +530,7 @@ func (h *Handler) handleViaResponsesAPI(w http.ResponseWriter, r *http.Request, 
 
 func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest, originalModel string, usage *tokenUsage) {
 	responsesReq.Stream = false
-	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, ExtraHeaders: context1mHeaders(responsesReq.Model)})
+	_, respData, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, ExtraHeaders: messageHeaders(r, context1mHeaders(responsesReq.Model))})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -565,7 +573,7 @@ func (h *Handler) handleResponsesNonStreaming(w http.ResponseWriter, r *http.Req
 
 func (h *Handler) handleResponsesStreaming(w http.ResponseWriter, r *http.Request, responsesReq ResponsesRequest, originalModel string, usage *tokenUsage) {
 	responsesReq.Stream = true
-	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, Stream: true, ExtraHeaders: context1mHeaders(responsesReq.Model)})
+	resp, _, err := h.upstream.Do(r.Context(), upstream.Request{Endpoint: "/responses", Body: responsesReq, Stream: true, ExtraHeaders: messageHeaders(r, context1mHeaders(responsesReq.Model))})
 	if err != nil {
 		var upstreamErr *upstream.UpstreamError
 		if errors.As(err, &upstreamErr) {
@@ -1341,4 +1349,16 @@ func extractNativeStreamUsage(line []byte, usage *tokenUsage) {
 			usage.Out = event.Usage.OutputTokens
 		}
 	}
+}
+
+// Preserve the protocol version on every upstream route; never forward client
+// credentials. Existing beta/context behavior stays keyed to the real target.
+func messageHeaders(r *http.Request, headers map[string]string) map[string]string {
+	if version := r.Header.Get("anthropic-version"); version != "" {
+		if headers == nil {
+			headers = make(map[string]string)
+		}
+		headers["anthropic-version"] = version
+	}
+	return headers
 }

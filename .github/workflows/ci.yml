@@ -6,6 +6,9 @@ on:
   release:
     types: [created]
 
+env:
+  DOCKER_BUILD_RECORD_UPLOAD: "false"
+
 permissions:
   contents: write
   packages: write
@@ -61,10 +64,6 @@ jobs:
                 -o "dist/copilot2api-$goos-$goarch$ext" .
             done
           done
-      - uses: actions/upload-artifact@v7
-        with:
-          name: copilot2api-binaries
-          path: dist/*
       - name: Upload to release
         if: github.event_name == 'release'
         env:
@@ -77,15 +76,9 @@ jobs:
     needs: [build]
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v7
-        with:
-          name: copilot2api-binaries
-          path: dist
-      - name: Make binaries executable
-        run: chmod +x dist/*
       - name: Smoke test image
         run: |
-          docker build -f Dockerfile.ci -t copilot2api-smoke .
+          docker build --build-arg COMMIT_SHA=$GITHUB_SHA -f Dockerfile -t copilot2api-smoke .
           docker run --rm copilot2api-smoke --version
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
@@ -99,14 +92,11 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ github.repository }}
         run: |
-          DATETIME=$(date -u +%Y%m%d%H%M)
+          DATETIME=$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S)
           BRANCH=${GITHUB_REF_NAME}
           SHA=$(echo "$GITHUB_SHA" | cut -c1-8)
           TAG="${DATETIME}-${BRANCH}-${SHA}"
           TAGS="${IMAGE_NAME,,}:${TAG}"
-          if [ "$BRANCH" = "main" ] || [ "${{ github.event_name }}" = "release" ]; then
-            TAGS="${TAGS},${IMAGE_NAME,,}:latest"
-          fi
           if [ "${{ github.event_name }}" = "release" ]; then
             TAGS="${TAGS},${IMAGE_NAME,,}:${{ github.ref_name }}"
           fi
@@ -114,9 +104,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: Dockerfile.ci
+          file: Dockerfile
+          build-args: COMMIT_SHA=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max

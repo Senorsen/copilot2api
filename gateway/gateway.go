@@ -100,6 +100,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	model, hasCache := extractModelAndCache(bodyBytes, remainder)
+	if strings.HasPrefix(remainder, "/v1/messages") {
+		model, _ = h.mc.ResolveAlias(model)
+	}
 
 	// Get available accounts pool
 	pool := h.getPool()

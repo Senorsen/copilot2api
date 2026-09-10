@@ -125,6 +125,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	cors, err := parseCORSConfig(os.Getenv("COPILOT2API_CORS_ORIGINS"), os.Getenv("COPILOT2API_CORS_PRESETS"), os.Getenv("COPILOT2API_CORS_ALLOW_HEADERS"), os.Getenv("COPILOT2API_CORS_ALLOW_CREDENTIALS"))
+	if err != nil {
+		slog.Error("invalid CORS configuration", "error", err)
+		os.Exit(1)
+	}
+	aliases, err := models.ParseAliases(os.Getenv("COPILOT2API_MODEL_ALIASES"))
+	if err != nil {
+		slog.Error("invalid model aliases", "error", err)
+		os.Exit(1)
+	}
+
 	// Determine token directory
 	if *tokenDir == "" {
 		if v := os.Getenv("COPILOT2API_TOKEN_DIR"); v != "" {
@@ -212,7 +223,7 @@ func main() {
 
 	// Models cache — pulls a current account's upstream client on every fetch
 	// so accounts added via the control plane after startup also work.
-	modelsCache := models.NewCache(func() *upstream.Client {
+	modelsCache := models.NewCacheWithAliases(func() *upstream.Client {
 		accs := accountManager.ListAccounts()
 		if len(accs) == 0 {
 			return nil
@@ -223,7 +234,7 @@ func main() {
 		}
 		tp := auth.NewAccountTokenProvider(client)
 		return upstream.NewClient(tp, transport)
-	}, 5*time.Minute)
+	}, 5*time.Minute, aliases)
 
 	// Stats recorder (opt-in via COPILOT2API_STATS_ENABLED)
 	statsEnabled := false
@@ -286,7 +297,7 @@ func main() {
 		Addr:              fmt.Sprintf("%s:%d", *host, *port),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		Handler:           proxyHandler,
+		Handler:           cors.wrap(proxyHandler),
 	}
 
 	// Create control plane server
@@ -363,6 +374,9 @@ func handleAccountRoute(w http.ResponseWriter, r *http.Request, am *auth.Account
 // handleWithTokenProvider dispatches a request using a specific token provider.
 func handleWithTokenProvider(w http.ResponseWriter, r *http.Request, tp upstream.TokenProvider, transport *http.Transport, mc *models.Cache, recorder *stats.Recorder) {
 	path := r.URL.Path
+	if mc != nil {
+		mc = mc.ForProvider(tp, transport)
+	}
 
 	switch {
 	case path == "/v1/messages" || strings.HasPrefix(path, "/v1/messages"):

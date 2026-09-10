@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/whtsky/copilot2api/auth"
+	"github.com/whtsky/copilot2api/internal/models"
 	"github.com/whtsky/copilot2api/storage"
 )
 
@@ -223,5 +224,34 @@ func TestGatewayRetriesStreamingModelUnsupported(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "data: [DONE]") {
 		t.Fatalf("stream body missing DONE: %s", response.Body.String())
+	}
+}
+
+func TestGatewayConfiguredAliasUsesRealAccountModel(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/models":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{{"id": "gpt-6-astra", "supported_endpoints": []string{"/chat/completions"}}}})
+		case "/chat/completions":
+			calls.Add(1)
+			var v map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&v)
+			if v["model"] != "gpt-6-astra" {
+				t.Errorf("model %v", v["model"])
+			}
+			writeChatSuccess(w, "gpt-6-astra")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	mc := models.NewCacheWithAliases(nil, time.Minute, models.Aliases{"claude-opus-5[1m]": "gpt-6-astra"})
+	handler := NewHandler(newGatewayAccountManager(t, testGatewayAccount{id: "mapped", username: "mapped", baseURL: server.URL}), nil, mc)
+	r := httptest.NewRequest("POST", "/gw/api/v1/messages", strings.NewReader(`{"model":"claude-opus-5[1m]","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"stream":false}`))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != 200 || calls.Load() != 1 || !strings.Contains(w.Body.String(), `"model":"claude-opus-5[1m]"`) {
+		t.Fatalf("code %d calls %d body %s", w.Code, calls.Load(), w.Body)
 	}
 }
