@@ -106,6 +106,9 @@ jobs:
           SHA=$(echo "$GITHUB_SHA" | cut -c1-8)
           TAG="${DATETIME}-${BRANCH}-${SHA}"
           TAGS="${IMAGE_NAME,,}:${TAG}"
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAGS="${TAGS},${IMAGE_NAME,,}:latest"
+          fi
           if [ "${{ github.event_name }}" = "release" ]; then
             TAGS="${TAGS},${IMAGE_NAME,,}:${{ github.ref_name }}"
           fi

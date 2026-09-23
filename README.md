@@ -52,6 +52,8 @@ services:
 
 </details>
 
+`latest` follows successful `main` image builds; use a dated commit tag to pin an image version.
+
 ### Reverse proxy under a path prefix
 
 Set `COPILOT2API_BASE_PATH=/copilot` (for Docker, `-e COPILOT2API_BASE_PATH=/copilot`) when exposing the dashboard at `/copilot/dashboard`. The page uses it as `<base href="/copilot/">`: a trailing `/` is added if missing, so relative Chart.js and usage/pricing URLs stay under `/copilot/`. Unset defaults to `/`. Other root-relative URLs beginning with `/` would ignore the base. The value must be a same-origin absolute path: external URLs, protocol-relative URLs (`//`), queries, fragments and backslashes are rejected at startup to prevent sending the admin token or loading scripts from another origin.
@@ -452,7 +454,7 @@ Responses retain the requested alias while `X-Upstream-Model`, routing and usage
 accounting identify the real target. For example, an alias called `claude-opus-5`
 that targets GPT is still GPT inference, not Claude.
 
-Container CI uses versioned Beijing-time timestamp/branch/short-SHA tags only, builds complete images from source, and emits no Actions binary or build-record artifact. Explicit GitHub releases can still attach binaries to the release.
+Container CI publishes Beijing-time timestamp/branch/short-SHA tags and updates `latest` on successful `main` builds. Release events also publish a version tag, but do not move `latest`. Images are built from source without Actions binary or build-record artifacts; explicit GitHub releases can still attach binaries.
 
 For upstream catalogs without a creation date, Anthropic model entries use the Unix epoch (`1970-01-01T00:00:00Z`) as an unknown-date compatibility value, not a claimed release date.
 
