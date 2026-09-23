@@ -6,16 +6,19 @@ import vm from 'node:vm';
 // Execute the actual embedded dashboard, not a duplicate cost implementation.
 const html = fs.readFileSync(new URL('./dashboard.html', import.meta.url), 'utf8');
 const script = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>')).replace(/showDashboard\(\);\s*$/, '');
-function dashboard(fetch) {
+function dashboard(fetch, baseHref = '/') {
   const elements = new Map();
   const element = id => {
     if (!elements.has(id)) elements.set(id, { value: id === 'apiToken' ? 'test-admin' : '', innerHTML: '', textContent: '', dataset: {} });
     return elements.get(id);
   };
+  const baseURI = new URL(baseHref, 'https://unit.test/dashboard').href;
   const ctx = vm.createContext({
-    document: { getElementById: element },
+    document: { getElementById: element, baseURI },
     localStorage: { getItem: () => null, setItem: () => {} },
-    URLSearchParams, fetch, console: { warn: () => {}, error: () => {} },
+    URL, URLSearchParams,
+    fetch: (input, init) => { const url = new URL(input, baseURI); return fetch(url.pathname + url.search, init); },
+    console: { warn: () => {}, error: () => {} },
     setInterval: () => 1, clearInterval: () => {},
   });
   vm.runInContext(script, ctx);
@@ -45,6 +48,22 @@ test('fetchData requests historical models and renders corrected estimate after 
   assert.match(d.element('cards').innerHTML, /\$36\.75/); // 5 + .5 + 6.25 +25, no extra5
   assert.match(d.element('pricingStatus').textContent, /Priced 1 \/ 1 requests/);
   assert.doesNotMatch(d.element('cards').innerHTML, /partial/);
+});
+
+test('prefixed dashboard fetches both usage and pricing under its base path', async () => {
+  const calls = [];
+  const d = dashboard(async url => {
+    calls.push(url);
+    if (url.startsWith('/copilot/usage?')) return response([row()]);
+    if (url.startsWith('/copilot/usage/pricing?')) return response({ 'retired-claude': price });
+    throw new Error(`unexpected URL ${url}`);
+  }, '/copilot/');
+  d.run('populateFilters = () => {}; renderChart = () => {};');
+  await d.run('fetchData()');
+  assert.equal(calls.length, 2);
+  assert.ok(calls[0].startsWith('/copilot/usage?'));
+  assert.ok(calls[1].startsWith('/copilot/usage/pricing?'));
+  assert.match(d.element('cards').innerHTML, /\$36\.75/);
 });
 
 test('missing models/required rates are explicit, zero rates valid, no fictional cache rate', async () => {

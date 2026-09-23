@@ -52,6 +52,12 @@ services:
 
 </details>
 
+### Reverse proxy under a path prefix
+
+Set `COPILOT2API_BASE_PATH=/copilot` (for Docker, `-e COPILOT2API_BASE_PATH=/copilot`) when exposing the dashboard at `/copilot/dashboard`. The page uses it as `<base href="/copilot/">`: a trailing `/` is added if missing, so relative Chart.js and usage/pricing URLs stay under `/copilot/`. Unset defaults to `/`. Other root-relative URLs beginning with `/` would ignore the base. The value must be a same-origin absolute path: external URLs, protocol-relative URLs (`//`), queries, fragments and backslashes are rejected at startup to prevent sending the admin token or loading scripts from another origin.
+
+The reverse proxy must **strip** `/copilot` before forwarding to port 7778. For example, Nginx `location /copilot/ { proxy_pass http://127.0.0.1:7778/; }` forwards `/copilot/dashboard` as `/dashboard`. Neither server's routes change: port 7778 still expects `/dashboard` and `/usage`, and data-plane paths on port 7777 stay unchanged.
+
 ### Binary
 
 ```bash
@@ -306,6 +312,7 @@ Returns cached LiteLLM model pricing JSON. Automatically fetched on startup and 
 | `COPILOT2API_HOST` | Server host | `127.0.0.1` |
 | `COPILOT2API_PORT` | Data plane port | `7777` |
 | `COPILOT2API_CONTROL_PORT` | Control plane port | `7778` |
+| `COPILOT2API_BASE_PATH` | Public dashboard base for a prefix-stripping proxy (e.g. `/copilot`; trailing slash added automatically) | `/` |
 | `COPILOT2API_DEBUG` | Enable debug logging | `false` |
 | `COPILOT2API_STATS_ENABLED` | Enable usage stats recording, dashboard, and pricing | `false` |
 | `COPILOT2API_STATS_DIR` | Stats data directory | `~/.config/copilot2api/stats` |

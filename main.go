@@ -302,7 +302,12 @@ func main() {
 
 	// Create control plane server
 	adminToken := os.Getenv("ADMIN_TOKEN")
-	controlServer := control.NewServer(accountManager, adminToken, statsDir, pricingCache, modelsCache, buildCommit())
+	basePath := os.Getenv("COPILOT2API_BASE_PATH")
+	if err := validateBasePath(basePath); err != nil {
+		slog.Error("invalid dashboard base path", "error", err)
+		os.Exit(1)
+	}
+	controlServer := control.NewServer(accountManager, adminToken, statsDir, pricingCache, modelsCache, buildCommit(), basePath)
 	controlHTTP := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", *host, *controlPort),
 		ReadHeaderTimeout: 10 * time.Second,

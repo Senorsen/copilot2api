@@ -4,6 +4,7 @@
 
 ### Features
 
+- Support dashboards behind prefix-stripping proxies with `COPILOT2API_BASE_PATH` (trailing slash added automatically; off-origin or ambiguous base URLs rejected). `control.NewServer` now requires explicit `commit` and `basePath` arguments.
 - Publish complete container images with dated commit tags only (no `latest`), without Actions binary/build-record artifacts; release binaries remain attached only to explicit releases.
 
 - Add opt-in data-plane CORS with multiple explicit origins, composable presets (`claude-office`), configurable extra headers/credentials, authenticated actual requests and pre-authentication OPTIONS handling.

@@ -46,6 +46,7 @@ type Server struct {
 	pricingCache     *stats.PricingCache
 	modelsCache      *models.Cache
 	commit           string
+	basePath         string
 	mu               sync.Mutex
 	flows            map[string]*pendingFlow
 }
@@ -64,12 +65,10 @@ type pendingFlow struct {
 	cancel          context.CancelFunc
 }
 
-func NewServer(am *auth.AccountManager, adminToken string, statsDir string, pricingCache *stats.PricingCache, modelsCache *models.Cache, commits ...string) *Server {
-	commit := "dev"
-	if len(commits) > 0 && commits[0] != "" {
-		commit = commits[0]
+func NewServer(am *auth.AccountManager, adminToken string, statsDir string, pricingCache *stats.PricingCache, modelsCache *models.Cache, commit, basePath string) *Server {
+	if commit == "" {
+		commit = "dev"
 	}
-
 	return &Server{
 		am:               am,
 		adminTokenDigest: securetoken.Hash(adminToken),
@@ -78,6 +77,7 @@ func NewServer(am *auth.AccountManager, adminToken string, statsDir string, pric
 		pricingCache:     pricingCache,
 		modelsCache:      modelsCache,
 		commit:           commit,
+		basePath:         basePath,
 		flows:            make(map[string]*pendingFlow),
 	}
 }
@@ -433,7 +433,12 @@ func (s *Server) handleUsagePricing(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	page := bytes.ReplaceAll(dashboardHTML, []byte("{{BUILD_COMMIT}}"), []byte(html.EscapeString(s.commit)))
+	basePath := s.basePath
+	if !strings.HasSuffix(basePath, "/") {
+		basePath += "/"
+	}
+	page := bytes.ReplaceAll(dashboardHTML, []byte("{{BASE_PATH}}"), []byte(html.EscapeString(basePath)))
+	page = bytes.ReplaceAll(page, []byte("{{BUILD_COMMIT}}"), []byte(html.EscapeString(s.commit)))
 	w.Write(page)
 }
 

@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=1400">
 <title>LLM Gateway Dashboard</title>
-<script src="/dashboard/chart.umd.min.js"></script>
+<base href="{{BASE_PATH}}">
+<script src="dashboard/chart.umd.min.js"></script>
 <style>
 :root { --bg: #1a1a2e; --surface: #16213e; --border: #0f3460; --text: #e0e0e0; --muted: #888; --accent: #0ea5e9; --accent2: #7c3aed; --accent3: #10b981; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -214,7 +215,7 @@ async function fetchPricing(models, token) {
   // Bound query size for long historical ranges with many models.
   for (let i = 0; i < names.length; i += 50) {
     const params = new URLSearchParams({ models: names.slice(i, i + 50).join(',') });
-    const r = await fetch(`/usage/pricing?${params}`, { headers: { 'Authorization': 'Bearer ' + token } });
+    const r = await fetch(new URL(`usage/pricing?${params}`, document.baseURI), { headers: { 'Authorization': 'Bearer ' + token } });
     if (!r.ok) throw new Error(`Pricing request failed (${r.status})`);
     const data = await r.json();
     if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid pricing response');
@@ -303,7 +304,7 @@ async function fetchData() {
   localStorage.setItem('c2a_token', token);
   try {
     const params = new URLSearchParams({ start: fmtLocalDate(start), end: fmtLocalDate(end), timezone: clientTimeZone });
-    const r = await fetch(`/usage?${params.toString()}`, { headers: { 'Authorization': 'Bearer ' + token } });
+    const r = await fetch(new URL(`usage?${params.toString()}`, document.baseURI), { headers: { 'Authorization': 'Bearer ' + token } });
     if (requestID !== dataRequestID) return;
     if (r.status === 401 || r.status === 403) { status.className = 'status err'; status.textContent = '✗ Invalid token'; return; }
     const data = await r.json();
